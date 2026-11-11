@@ -19,6 +19,7 @@ func newServerWithAOF(t *testing.T, args ...string) *Server {
 	if err := srv.setupAOF(); err != nil {
 		t.Fatalf("setupAOF: %v", err)
 	}
+	t.Cleanup(func() { srv.closeAOF() })
 	return srv
 }
 
@@ -75,7 +76,7 @@ func TestExistingAppendOnlyDirectoryIsKept(t *testing.T) {
 		t.Fatalf("writing a file: %v", err)
 	}
 
-	// Starting twice in a row is fine too.
+	// Starting several times in a row is fine too.
 	newServerWithAOF(t, "--dir", dir, "--appendonly", "yes")
 	newServerWithAOF(t, "--dir", dir, "--appendonly", "yes")
 

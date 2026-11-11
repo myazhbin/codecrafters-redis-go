@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"net"
+	"os"
 	"sync"
 )
 
@@ -34,6 +35,9 @@ type Server struct {
 	// streamWaiters holds the clients blocked until an entry is added to a
 	// stream, by stream key.
 	streamWaiters waitQueues[*streamWaiter]
+	// aof is the append-only file the commands that modify the dataset are
+	// logged to, or nil if AOF persistence is disabled.
+	aof *os.File
 	// masterOffset is, on a replica, the number of bytes of the master's
 	// replication stream the replica has processed so far.
 	masterOffset int64
