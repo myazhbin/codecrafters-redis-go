@@ -37,6 +37,13 @@ type Server struct {
 	// masterOffset is, on a replica, the number of bytes of the master's
 	// replication stream the replica has processed so far.
 	masterOffset int64
+	// writeOffset is the replication offset right after the last write that
+	// was propagated: a replica that got that far has every write made so
+	// far. The stream may go further, with commands that aren't writes.
+	writeOffset int64
+	// ackWaiters holds the clients blocked in WAIT, until enough replicas
+	// have acknowledged the writes they wait for.
+	ackWaiters map[*ackWaiter]struct{}
 	// replicas holds the clients that are replicas of this server: the ones
 	// that completed the handshake with PSYNC.
 	replicas map[*client]struct{}
@@ -67,6 +74,7 @@ func NewServerWithConfig(cfg config) *Server {
 		streamWaiters: make(waitQueues[*streamWaiter]),
 		watchers:      make(map[string]map[*client]struct{}),
 		replicas:      make(map[*client]struct{}),
+		ackWaiters:    make(map[*ackWaiter]struct{}),
 	}
 	s.store.onModify = s.keyModified
 	return s

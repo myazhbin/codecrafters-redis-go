@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"strconv"
 	"strings"
@@ -276,6 +277,7 @@ func cmdReplconf(c *client, args []string) []byte {
 		offset, ok := parseInt(args[1])
 		if _, isReplica := c.server.replicas[c]; isReplica && ok && offset > c.ackOffset {
 			c.ackOffset = offset
+			c.server.wakeAckWaiters()
 		}
 		return nil
 	}
@@ -373,6 +375,7 @@ func (s *Server) propagate(command ...string) {
 		return
 	}
 	s.feedReplicas(encodeCommandArray(command...))
+	s.writeOffset = s.replOffset
 }
 
 // beginPropagationBatch makes the commands propagated from now on be held
@@ -398,6 +401,7 @@ func (s *Server) endPropagationBatch() {
 	}
 	stream = append(stream, encodeCommandArray("EXEC")...)
 	s.feedReplicas(stream)
+	s.writeOffset = s.replOffset
 }
 
 // feedReplicas appends data to the replication stream: it is sent to every
@@ -491,10 +495,17 @@ func rdbTransfer(file []byte) []byte {
 // replicas that have acknowledged every write made so far, which tells the
 // client how many copies of its last write exist.
 //
-// numreplicas is the number of replicas the client would like to hear from
-// and timeout the time it is ready to wait for them, in milliseconds.
+// If fewer than numreplicas replicas are known to be up to date, the replicas
+// are asked how far they got, with REPLCONF GETACK, and the client is blocked
+// until numreplicas of them have acknowledged the writes or timeout, in
+// milliseconds, has elapsed. The reply is the number reached by then, which
+// can be lower or higher than numreplicas. A timeout of 0 means "wait for as
+// long as it takes".
 func cmdWait(c *client, args []string) []byte {
-	if _, ok := parseInt(args[0]); !ok {
+	s := c.server
+
+	need, ok := parseInt(args[0])
+	if !ok {
 		return errorReply(errNotAnInteger)
 	}
 	timeout, ok := parseInt(args[1])
@@ -504,15 +515,89 @@ func cmdWait(c *client, args []string) []byte {
 	if timeout < 0 {
 		return errorReply("ERR timeout is negative")
 	}
-	return integerReply(c.server.replicasInSync())
+	if s.isReplica() {
+		return errorReply("ERR WAIT cannot be used with replica instances. Please also note that writes to replicas are just local and are not propagated.")
+	}
+
+	// What is waited for is fixed now: writes made while the client waits
+	// aren't its concern.
+	target := s.writeOffset
+	acked := s.replicasAt(target)
+
+	// There's nothing to wait for if enough replicas are up to date, or if
+	// all of them are. And there's no waiting inside a transaction.
+	if int64(acked) >= need || acked == len(s.replicas) || c.executing {
+		return integerReply(acked)
+	}
+
+	// A nil channel is never ready: without timeout the wait has no deadline.
+	var expired <-chan time.Time
+	if timeout > 0 {
+		// A timeout too long to be represented is as good as none.
+		if timeout <= math.MaxInt64/int64(time.Millisecond) {
+			timer := time.NewTimer(time.Duration(timeout) * time.Millisecond)
+			defer timer.Stop()
+			expired = timer.C
+		}
+	}
+
+	w := &ackWaiter{target: target, need: need, done: make(chan struct{})}
+	s.ackWaiters[w] = struct{}{}
+	s.requestAcks()
+
+	// Wait without holding the lock, so that the acknowledgements can be
+	// processed.
+	s.mu.Unlock()
+	select {
+	case <-w.done:
+	case <-expired:
+	case <-c.ctx.Done():
+	}
+	s.mu.Lock()
+
+	delete(s.ackWaiters, w)
+	if c.ctx.Err() != nil {
+		return nil // nobody is there to receive the reply
+	}
+	return integerReply(s.replicasAt(target))
 }
 
-// replicasInSync returns the number of replicas known to have processed the
-// whole replication stream.
-func (s *Server) replicasInSync() int {
+// ackWaiter is a client blocked in WAIT.
+type ackWaiter struct {
+	// target is the replication offset replicas must have acknowledged to
+	// count, and need the number of such replicas the client waits for.
+	target int64
+	need   int64
+	// done is closed once enough replicas have acknowledged.
+	done chan struct{}
+}
+
+// requestAcks asks every replica to report how much of the replication
+// stream it has processed. Their answers arrive later, as REPLCONF ACK
+// commands. The request is part of the stream, and counts in its offset like
+// anything else the replicas receive.
+func (s *Server) requestAcks() {
+	s.feedReplicas(encodeCommandArray("REPLCONF", "GETACK", "*"))
+}
+
+// wakeAckWaiters unblocks the clients waiting in WAIT that have been
+// acknowledged by enough replicas. It must be called whenever a replica
+// acknowledges a new offset.
+func (s *Server) wakeAckWaiters() {
+	for w := range s.ackWaiters {
+		if int64(s.replicasAt(w.target)) >= w.need {
+			close(w.done)
+			delete(s.ackWaiters, w)
+		}
+	}
+}
+
+// replicasAt returns the number of replicas known to have processed the
+// replication stream up to offset at least.
+func (s *Server) replicasAt(offset int64) int {
 	n := 0
 	for replica := range s.replicas {
-		if replica.ackOffset >= s.replOffset {
+		if replica.ackOffset >= offset {
 			n++
 		}
 	}
