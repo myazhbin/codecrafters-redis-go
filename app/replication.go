@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -57,14 +59,49 @@ func (s *Server) followMaster() error {
 
 // handshake is how a replica introduces itself to its master, over the
 // connection it just opened: it sends commands one at a time, waiting for the
-// master to answer each of them.
+// master to answer each of them before sending the next.
 //
-// Only the first step is implemented: a PING that checks the master is there.
+//   - PING checks that the master is there and answers.
+//   - REPLCONF listening-port tells the master which port the replica serves
+//     its own clients on.
+//   - REPLCONF capa psync2 tells the master the replica understands the
+//     second version of the synchronization protocol.
 func (s *Server) handshake(w io.Writer, r *bufio.Reader) error {
-	if _, err := w.Write(encodeCommandArray("PING")); err != nil {
-		return err
+	steps := []struct {
+		command []string
+		// reply is the status the master is expected to answer with.
+		reply string
+	}{
+		{[]string{"PING"}, "PONG"},
+		{[]string{"REPLCONF", "listening-port", strconv.Itoa(s.cfg.port)}, "OK"},
+		{[]string{"REPLCONF", "capa", "psync2"}, "OK"},
+	}
+
+	for _, step := range steps {
+		reply, err := roundTrip(w, r, step.command...)
+		if err != nil {
+			return fmt.Errorf("%s: %w", strings.Join(step.command, " "), err)
+		}
+		if reply != "+"+step.reply {
+			return fmt.Errorf("%s: unexpected reply %q from the master, want %q",
+				strings.Join(step.command, " "), reply, "+"+step.reply)
+		}
 	}
 	return nil
+}
+
+// roundTrip sends a command and waits for its reply, which must fit on a
+// single line: a simple string, an error or an integer. It returns that line,
+// type prefix included and line terminator excluded.
+func roundTrip(w io.Writer, r *bufio.Reader, command ...string) (string, error) {
+	if _, err := w.Write(encodeCommandArray(command...)); err != nil {
+		return "", err
+	}
+	reply, err := readLine(r)
+	if err != nil {
+		return "", fmt.Errorf("waiting for the reply: %w", midCommand(err))
+	}
+	return reply, nil
 }
 
 // encodeCommandArray encodes a command the way clients send it: as a RESP
