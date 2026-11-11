@@ -7,9 +7,15 @@ import (
 )
 
 func main() {
-	l, err := net.Listen("tcp", "0.0.0.0:6379")
+	cfg, err := parseConfig(os.Args[1:])
 	if err != nil {
-		fmt.Println("Failed to bind to port 6379")
+		fmt.Println("Invalid arguments:", err)
+		os.Exit(1)
+	}
+
+	l, err := net.Listen("tcp", cfg.listenAddress())
+	if err != nil {
+		fmt.Printf("Failed to bind to port %d\n", cfg.port)
 		os.Exit(1)
 	}
 	defer l.Close()
