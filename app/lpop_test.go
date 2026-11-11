@@ -138,10 +138,149 @@ func TestLPopOnlyAffectsItsList(t *testing.T) {
 	expectReply(t, conn, bulkArray("x", "y"))
 }
 
+func TestLPopWithCount(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	do(t, conn, "RPUSH", "list_key", "one", "two", "three", "four", "five")
+	expectReply(t, conn, ":5\r\n")
+
+	// With a count the removed elements come back as an array.
+	do(t, conn, "LPOP", "list_key", "2")
+	expectReply(t, conn, bulkArray("one", "two"))
+
+	do(t, conn, "LRANGE", "list_key", "0", "-1")
+	expectReply(t, conn, bulkArray("three", "four", "five"))
+}
+
+func TestLPopWithCountSeveralTimes(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	do(t, conn, "RPUSH", "list_key", "a", "b", "c", "d", "e", "f")
+	expectReply(t, conn, ":6\r\n")
+
+	do(t, conn, "LPOP", "list_key", "2")
+	expectReply(t, conn, bulkArray("a", "b"))
+	do(t, conn, "LPOP", "list_key", "3")
+	expectReply(t, conn, bulkArray("c", "d", "e"))
+	do(t, conn, "LLEN", "list_key")
+	expectReply(t, conn, ":1\r\n")
+	do(t, conn, "LPOP", "list_key", "1")
+	expectReply(t, conn, bulkArray("f"))
+}
+
+func TestLPopWithCountOfOneRepliesWithAnArray(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	do(t, conn, "RPUSH", "list_key", "a", "b")
+	expectReply(t, conn, ":2\r\n")
+
+	// "LPOP key 1" is an array of one element; "LPOP key" is a bulk string.
+	do(t, conn, "LPOP", "list_key", "1")
+	expectReply(t, conn, "*1\r\n$1\r\na\r\n")
+	do(t, conn, "LPOP", "list_key")
+	expectReply(t, conn, "$1\r\nb\r\n")
+}
+
+func TestLPopWithCountLargerThanTheList(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	do(t, conn, "RPUSH", "list_key", "a", "b", "c")
+	expectReply(t, conn, ":3\r\n")
+
+	// Every element is removed and returned...
+	do(t, conn, "LPOP", "list_key", "10")
+	expectReply(t, conn, bulkArray("a", "b", "c"))
+
+	// ...which deletes the list.
+	do(t, conn, "LLEN", "list_key")
+	expectReply(t, conn, ":0\r\n")
+	do(t, conn, "GET", "list_key")
+	expectReply(t, conn, "$-1\r\n")
+	do(t, conn, "LPOP", "list_key", "10")
+	expectReply(t, conn, "*-1\r\n")
+}
+
+func TestLPopWithCountEqualToTheLength(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	do(t, conn, "RPUSH", "list_key", "a", "b", "c")
+	expectReply(t, conn, ":3\r\n")
+	do(t, conn, "LPOP", "list_key", "3")
+	expectReply(t, conn, bulkArray("a", "b", "c"))
+	do(t, conn, "LRANGE", "list_key", "0", "-1")
+	expectReply(t, conn, emptyArray)
+}
+
+func TestLPopWithCountOfZero(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	do(t, conn, "RPUSH", "list_key", "a", "b")
+	expectReply(t, conn, ":2\r\n")
+
+	// Nothing is removed: the reply is an empty array.
+	do(t, conn, "LPOP", "list_key", "0")
+	expectReply(t, conn, emptyArray)
+	do(t, conn, "LRANGE", "list_key", "0", "-1")
+	expectReply(t, conn, bulkArray("a", "b"))
+}
+
+func TestLPopWithCountOnMissingList(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	// With a count, a missing list is a null array rather than a null string.
+	do(t, conn, "LPOP", "missing", "2")
+	expectReply(t, conn, "*-1\r\n")
+	do(t, conn, "LPOP", "missing", "0")
+	expectReply(t, conn, "*-1\r\n")
+	do(t, conn, "LPOP", "missing")
+	expectReply(t, conn, "$-1\r\n")
+}
+
+func TestLPopWithInvalidCount(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	do(t, conn, "RPUSH", "list_key", "a", "b", "c")
+	expectReply(t, conn, ":3\r\n")
+
+	const outOfRange = "-ERR value is out of range, must be positive\r\n"
+	for _, count := range []string{"-1", "-100", "two", "1.5", "", "99999999999999999999"} {
+		do(t, conn, "LPOP", "list_key", count)
+		expectReply(t, conn, outOfRange)
+	}
+	// The count is validated before the key is even looked up.
+	do(t, conn, "LPOP", "missing", "-1")
+	expectReply(t, conn, outOfRange)
+
+	// Rejected commands removed nothing.
+	do(t, conn, "LRANGE", "list_key", "0", "-1")
+	expectReply(t, conn, bulkArray("a", "b", "c"))
+}
+
+func TestLPopWithCountAgainstStringIsWrongType(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	do(t, conn, "SET", "text", "value")
+	expectReply(t, conn, "+OK\r\n")
+	do(t, conn, "LPOP", "text", "2")
+	expectReply(t, conn, wrongTypeError)
+}
+
+func TestLPopWithCountReturnsElementsVerbatim(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	elements := []string{"", "with space", "a\r\nb", "\x00\xff"}
+	do(t, conn, append([]string{"RPUSH", "list_key"}, elements...)...)
+	expectReply(t, conn, ":4\r\n")
+	do(t, conn, "LPOP", "list_key", "4")
+	expectReply(t, conn, bulkArray(elements...))
+}
+
 func TestLPopWrongNumberOfArguments(t *testing.T) {
 	conn := dial(t, startTestServer(t))
 
 	do(t, conn, "LPOP")
+	expectReply(t, conn, "-ERR wrong number of arguments for 'lpop' command\r\n")
+	do(t, conn, "LPOP", "list_key", "1", "extra")
 	expectReply(t, conn, "-ERR wrong number of arguments for 'lpop' command\r\n")
 }
 

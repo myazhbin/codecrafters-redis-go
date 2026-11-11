@@ -139,6 +139,8 @@ func TestReplyEncoding(t *testing.T) {
 		{"array with an empty bulk string", bulkStringArray([]string{""}), "*1\r\n$0\r\n\r\n"},
 		{"empty array", bulkStringArray([]string{}), "*0\r\n"},
 		{"nil slice is the empty array", bulkStringArray(nil), "*0\r\n"},
+		{"null array", nullArray, "*-1\r\n"},
+		{"null bulk string", nullBulkString, "$-1\r\n"},
 	}
 
 	for _, tt := range tests {

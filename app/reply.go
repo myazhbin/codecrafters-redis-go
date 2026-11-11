@@ -46,3 +46,7 @@ func bulkStringArray(items []string) []byte {
 	}
 	return b
 }
+
+// nullArray is the reply for an array that doesn't exist. It is distinct from
+// the empty array, which is encoded as "*0\r\n".
+var nullArray = []byte("*-1\r\n")

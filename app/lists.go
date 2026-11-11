@@ -95,23 +95,46 @@ func cmdLPush(s *Server, args []string) []byte {
 	return integerReply(len(l.items))
 }
 
-// cmdLPop implements LPOP key: it removes the first element of the list
-// stored at key and replies with it, or with a null bulk string if the key
-// doesn't exist. A list that loses its last element is deleted.
+// cmdLPop implements LPOP key [count]: it removes elements from the start of
+// the list stored at key and replies with them. A list that loses its last
+// element is deleted.
+//
+// Without count, a single element is removed and sent as a bulk string, or a
+// null bulk string if the key doesn't exist. With count, up to count elements
+// are removed and sent as an array, or a null array if the key doesn't exist.
 func cmdLPop(s *Server, args []string) []byte {
+	if len(args) > 2 {
+		return wrongArgumentCountError("LPOP")
+	}
 	key := args[0]
+
+	hasCount := len(args) == 2
+	count := 1
+	if hasCount {
+		var err error
+		count, err = strconv.Atoi(args[1])
+		if err != nil || count < 0 {
+			return errorReply("ERR value is out of range, must be positive")
+		}
+	}
 
 	l, err := s.store.getList(key)
 	if err != nil {
 		return errorReply(err.Error())
 	}
 	if l == nil {
+		if hasCount {
+			return nullArray
+		}
 		return nullBulkString
 	}
 
-	popped := l.popFront(1)
+	popped := l.popFront(count)
 	if len(l.items) == 0 {
 		s.store.delete(key)
+	}
+	if hasCount {
+		return bulkStringArray(popped)
 	}
 	return bulkString(popped[0])
 }
