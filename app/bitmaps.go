@@ -251,13 +251,47 @@ func cmdBitCount(c *client, args []string) []byte {
 	return integerReply(countBits(value, start, end))
 }
 
+// bitOperations are the operations of BITOP that combine several strings, by
+// name. Each of them combines, in place, the result so far with one more
+// string, which is at most as long as the result: the bytes it doesn't have
+// count as zeros.
+//
+// The strings are read byte by byte: ranging over them would go rune by rune.
+var bitOperations = map[string]func(result []byte, source string){
+	"AND": func(result []byte, source string) {
+		for i := 0; i < len(source); i++ {
+			result[i] &= source[i]
+		}
+		// The zeros the string is extended with clear what is left.
+		clear(result[len(source):])
+	},
+	"OR": func(result []byte, source string) {
+		for i := 0; i < len(source); i++ {
+			result[i] |= source[i]
+		}
+	},
+	"XOR": func(result []byte, source string) {
+		for i := 0; i < len(source); i++ {
+			result[i] ^= source[i]
+		}
+	},
+}
+
 // cmdBitOp implements BITOP operation destkey key [key ...]: it combines the
 // strings stored at the keys, bit by bit, and stores the result at destkey,
 // replacing whatever it held. The reply is the length of the result, in
 // bytes.
 //
-// The operation is AND: a bit of the result is 1 when that bit is 1 in every
-// one of the strings.
+// The operation is one of:
+//
+//   - AND: a bit of the result is 1 when that bit is 1 in every one of the
+//     strings;
+//   - OR: a bit of the result is 1 when that bit is 1 in at least one of the
+//     strings;
+//   - XOR: a bit of the result is 1 when that bit is 1 in an odd number of
+//     the strings;
+//   - NOT, which takes a single key: a bit of the result is 1 when that bit
+//     is 0 in the string.
 //
 // The result is as long as the longest of the strings. The shorter ones, and
 // the keys that don't exist, count as if they were extended with zero bytes.
@@ -266,7 +300,13 @@ func cmdBitCount(c *client, args []string) []byte {
 func cmdBitOp(c *client, args []string) []byte {
 	s := c.server
 	operation, dest, keys := strings.ToUpper(args[0]), args[1], args[2:]
-	if operation != "AND" {
+	combine, ok := bitOperations[operation]
+	switch {
+	case operation == "NOT":
+		if len(keys) != 1 {
+			return errorReply("ERR BITOP NOT must be called with a single source key.")
+		}
+	case !ok:
 		return errorReply("ERR syntax error")
 	}
 
@@ -295,13 +335,13 @@ func cmdBitOp(c *client, args []string) []byte {
 	// combined with each of the others in turn.
 	result := make([]byte, length)
 	copy(result, sources[0])
-	for _, source := range sources[1:] {
-		// Byte by byte: ranging over a string would go rune by rune.
-		for i := 0; i < len(source); i++ {
-			result[i] &= source[i]
+	if operation == "NOT" {
+		for i := range result {
+			result[i] = ^result[i]
 		}
-		// The zeros the string is extended with clear what is left.
-		clear(result[len(source):])
+	}
+	for _, source := range sources[1:] {
+		combine(result, source)
 	}
 
 	s.store.setString(dest, string(result), noExpiry)
