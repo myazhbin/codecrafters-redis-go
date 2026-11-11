@@ -26,6 +26,22 @@ func (l *list) pushFront(elements ...string) {
 	l.items = append(items, l.items...)
 }
 
+// popFront removes up to count elements from the start of the list and
+// returns them, first element first. Fewer elements are returned if the list
+// is shorter than count.
+func (l *list) popFront(count int) []string {
+	count = min(max(count, 0), len(l.items))
+
+	popped := make([]string, count)
+	copy(popped, l.items[:count])
+
+	// Clear the slots that are left behind so the popped strings can be
+	// garbage collected even though the backing array lives on.
+	clear(l.items[:count])
+	l.items = l.items[count:]
+	return popped
+}
+
 // slice returns the elements of the list from index start to index stop,
 // both included.
 //
@@ -77,6 +93,27 @@ func cmdLPush(s *Server, args []string) []byte {
 	}
 	l.pushFront(args[1:]...)
 	return integerReply(len(l.items))
+}
+
+// cmdLPop implements LPOP key: it removes the first element of the list
+// stored at key and replies with it, or with a null bulk string if the key
+// doesn't exist. A list that loses its last element is deleted.
+func cmdLPop(s *Server, args []string) []byte {
+	key := args[0]
+
+	l, err := s.store.getList(key)
+	if err != nil {
+		return errorReply(err.Error())
+	}
+	if l == nil {
+		return nullBulkString
+	}
+
+	popped := l.popFront(1)
+	if len(l.items) == 0 {
+		s.store.delete(key)
+	}
+	return bulkString(popped[0])
 }
 
 // cmdLLen implements LLEN key: it replies with the number of elements of the

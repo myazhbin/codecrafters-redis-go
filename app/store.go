@@ -64,6 +64,12 @@ func (st *store) lookup(key string) (entry, bool) {
 	return e, true
 }
 
+// delete removes key from the keyspace. Deleting a key that doesn't exist is
+// a no-op.
+func (st *store) delete(key string) {
+	delete(st.entries, key)
+}
+
 // getString returns the string stored at key, and whether the key exists. It
 // fails with errWrongType if the key holds something else than a string.
 func (st *store) getString(key string) (string, bool, error) {
@@ -103,8 +109,8 @@ func (st *store) getList(key string) (*list, error) {
 // doesn't exist. It fails with errWrongType if the key holds something else
 // than a list.
 //
-// Callers must add at least one element to a list they created: empty lists
-// are not allowed to stay in the keyspace.
+// Lists never stay empty in the keyspace: callers must add at least one
+// element to a list they created, and delete the key of a list they emptied.
 func (st *store) getOrCreateList(key string) (*list, error) {
 	l, err := st.getList(key)
 	if err != nil {
