@@ -367,7 +367,13 @@ func lzfDecompress(data []byte, length int) ([]byte, error) {
 // loadRDBFile loads the keys of the RDB file the server is configured with
 // into the keyspace. Keys that have already expired are left out. A file that
 // doesn't exist is the same as an empty one: there is nothing to load.
+//
+// The RDB file isn't used when AOF persistence is enabled: the append-only
+// file is then what the dataset is rebuilt from.
 func (s *Server) loadRDBFile() error {
+	if s.cfg.appendOnly {
+		return nil
+	}
 	file, err := os.ReadFile(filepath.Join(s.cfg.dir, s.cfg.dbFilename))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil

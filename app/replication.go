@@ -381,6 +381,9 @@ func (s *Server) propagate(command ...string) {
 // recordWrite logs encoded commands that modified the dataset to the
 // append-only file and sends them to the replicas.
 func (s *Server) recordWrite(data []byte) {
+	if s.loading {
+		return // the write comes from the append-only file itself
+	}
 	s.appendToAOF(data)
 	s.feedReplicas(data)
 	s.writeOffset = s.replOffset

@@ -39,6 +39,9 @@ type Server struct {
 	// aof is the append-only file the commands that modify the dataset are
 	// logged to, or nil if AOF persistence is disabled.
 	aof *os.File
+	// loading is set while the server rebuilds its dataset by replaying the
+	// append-only file, at startup.
+	loading bool
 	// aofSyncs counts the times the append-only file was flushed to the
 	// disk.
 	aofSyncs int

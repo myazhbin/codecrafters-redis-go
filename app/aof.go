@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bufio"
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -53,7 +56,9 @@ func (cfg config) manifestContents() string {
 //   - it reads the manifest to find which file is the incremental
 //     append-only file. Without a manifest, the file has its default name and
 //     a manifest that lists it is written;
-//   - it opens that file, creating it empty if it doesn't exist. A file that
+//   - it replays the commands that file holds, if it exists, to rebuild
+//     the dataset as it was when they were logged;
+//   - it opens the file, creating it empty if it doesn't exist. A file that
 //     is already there is left as it is: commands are added at its end.
 //
 // It does nothing when AOF persistence is disabled.
@@ -84,7 +89,12 @@ func (s *Server) setupAOF() error {
 		}
 	}
 
-	file, err := os.OpenFile(filepath.Join(s.cfg.appendDir(), name), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
+	path := filepath.Join(s.cfg.appendDir(), name)
+	if err := s.replayAOF(path); err != nil {
+		return fmt.Errorf("replaying the append-only file %s: %w", name, err)
+	}
+
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
 	if err != nil {
 		return fmt.Errorf("opening the append-only file: %w", err)
 	}
@@ -131,6 +141,66 @@ func (s *Server) syncAOFPeriodically(file *os.File, interval time.Duration, stop
 		s.mu.Lock()
 		s.aofSyncs++
 		s.mu.Unlock()
+	}
+}
+
+// replayAOF executes the commands logged in the append-only file at path, in
+// order, as if a client had sent them: that rebuilds the dataset the server
+// had when it logged them. A file that doesn't exist holds no command.
+//
+// A server that stops abruptly can leave a command half written at the end of
+// the file. Such a command is dropped, and cut off the file so that the
+// commands logged from now on are appended to a clean log. A file that is
+// invalid anywhere else isn't replayed at all: it is an error.
+func (s *Server) replayAOF(path string) error {
+	file, err := os.Open(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	// While the commands of the file are executed they aren't recorded
+	// again: they are already in the file.
+	s.mu.Lock()
+	s.loading = true
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.loading = false
+		s.mu.Unlock()
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// The commands are run on behalf of a client of their own, which keeps
+	// the state of the transactions found in the file.
+	replayer := &client{server: s, ctx: ctx}
+	defer func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		replayer.unwatch()
+	}()
+
+	read := &countingReader{r: file}
+	r := bufio.NewReader(read)
+	for {
+		// Where the command that is about to be read starts in the file.
+		start := read.n - int64(r.Buffered())
+
+		args, err := readCommand(r)
+		switch {
+		case err == io.EOF:
+			return nil
+		case errors.Is(err, io.ErrUnexpectedEOF):
+			fmt.Fprintf(os.Stderr, "The append-only file ends with an incomplete command: truncating it to %d bytes\n", start)
+			return os.Truncate(path, start)
+		case err != nil:
+			return fmt.Errorf("at offset %d: %w", start, err)
+		}
+		replayer.execute(args)
 	}
 }
 
