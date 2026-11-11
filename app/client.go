@@ -42,6 +42,10 @@ type client struct {
 	// isMaster is set, on a replica, for the client that stands for the
 	// master: the one whose commands come from the replication stream.
 	isMaster bool
+	// ackOffset is, for a replica, how much of the replication stream it is
+	// known to have processed: the offset it started from, or the last one
+	// it acknowledged with REPLCONF ACK.
+	ackOffset int64
 	// executing is set while EXEC runs the queued commands. Commands that
 	// would otherwise block must not do so then: a transaction runs from
 	// start to finish without letting any other client in.

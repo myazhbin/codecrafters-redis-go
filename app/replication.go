@@ -261,10 +261,23 @@ func encodeCommandArray(args ...string) []byte {
 // GETACK only means something coming from the master: from anyone else it is
 // ignored, without a reply.
 //
+// Replicas answer GETACK, and can report on their own, with "ACK <offset>".
+// There is no reply to it.
+//
 // Option names are case-insensitive.
 func cmdReplconf(c *client, args []string) []byte {
 	if len(args)%2 != 0 {
 		return errorReply("ERR syntax error")
+	}
+
+	if strings.EqualFold(args[0], "ACK") {
+		// Acknowledgements only count coming from replicas, and a replica
+		// never goes back in the stream.
+		offset, ok := parseInt(args[1])
+		if _, isReplica := c.server.replicas[c]; isReplica && ok && offset > c.ackOffset {
+			c.ackOffset = offset
+		}
+		return nil
 	}
 
 	if strings.EqualFold(args[0], "GETACK") {
@@ -332,6 +345,8 @@ func (s *Server) addReplica(c *client) {
 		c.outbox = newOutbox()
 		go c.outbox.run(c.conn)
 	}
+	// The snapshot brings the replica up to where the stream is now.
+	c.ackOffset = s.replOffset
 	s.replicas[c] = struct{}{}
 }
 
@@ -470,4 +485,36 @@ func rdbTransfer(file []byte) []byte {
 	b = strconv.AppendInt(b, int64(len(file)), 10)
 	b = append(b, '\r', '\n')
 	return append(b, file...)
+}
+
+// cmdWait implements WAIT numreplicas timeout: it replies with the number of
+// replicas that have acknowledged every write made so far, which tells the
+// client how many copies of its last write exist.
+//
+// numreplicas is the number of replicas the client would like to hear from
+// and timeout the time it is ready to wait for them, in milliseconds.
+func cmdWait(c *client, args []string) []byte {
+	if _, ok := parseInt(args[0]); !ok {
+		return errorReply(errNotAnInteger)
+	}
+	timeout, ok := parseInt(args[1])
+	if !ok {
+		return errorReply("ERR timeout is not an integer or out of range")
+	}
+	if timeout < 0 {
+		return errorReply("ERR timeout is negative")
+	}
+	return integerReply(c.server.replicasInSync())
+}
+
+// replicasInSync returns the number of replicas known to have processed the
+// whole replication stream.
+func (s *Server) replicasInSync() int {
+	n := 0
+	for replica := range s.replicas {
+		if replica.ackOffset >= s.replOffset {
+			n++
+		}
+	}
+	return n
 }

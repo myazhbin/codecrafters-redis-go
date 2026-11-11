@@ -119,7 +119,8 @@ func TestReplicaAcknowledgesInTheMiddleOfATransaction(t *testing.T) {
 
 	link.propagate([]string{"MULTI"}, []string{"SET", "foo", "1"})
 	link.propagate([]string{"REPLCONF", "GETACK", "*"})
-	link.expectCommand("REPLCONF", "ACK", "43")
+	// 15 bytes for MULTI and 29 for SET.
+	link.expectCommand("REPLCONF", "ACK", "44")
 
 	link.propagate([]string{"EXEC"})
 	conn := dial(t, addr)

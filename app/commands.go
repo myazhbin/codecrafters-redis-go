@@ -53,6 +53,7 @@ var commands = map[string]command{
 	// acknowledge at any point of the replication stream.
 	"REPLCONF": {arity: -1, handler: cmdReplconf, immediate: true},
 	"PSYNC":    {arity: 3, handler: cmdPsync},
+	"WAIT":     {arity: 3, handler: cmdWait},
 
 	"MULTI":   {arity: 1, handler: cmdMulti, immediate: true},
 	"EXEC":    {arity: 1, handler: cmdExec, immediate: true},
