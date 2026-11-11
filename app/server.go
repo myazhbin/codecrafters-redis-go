@@ -75,6 +75,9 @@ type Server struct {
 	// watchers holds the clients watching a key with WATCH, by key. Keys
 	// nobody watches have no entry.
 	watchers map[string]map[*client]struct{}
+	// subscribers holds the clients subscribed to a channel with SUBSCRIBE,
+	// by channel. Channels nobody is subscribed to have no entry.
+	subscribers map[string]map[*client]struct{}
 }
 
 // NewServer returns a server with an empty keyspace and the default
@@ -94,6 +97,7 @@ func NewServerWithConfig(cfg config) *Server {
 		listWaiters:     make(waitQueues[*listWaiter]),
 		streamWaiters:   make(waitQueues[*streamWaiter]),
 		watchers:        make(map[string]map[*client]struct{}),
+		subscribers:     make(map[string]map[*client]struct{}),
 		replicas:        make(map[*client]struct{}),
 		ackWaiters:      make(map[*ackWaiter]struct{}),
 	}

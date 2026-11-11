@@ -48,8 +48,50 @@ func (c *client) inSubscribedMode() bool {
 // subscribe subscribes the client to channel. It does nothing if the client
 // is subscribed to it already.
 func (c *client) subscribe(channel string) {
+	if _, ok := c.subscriptions[channel]; ok {
+		return
+	}
 	if c.subscriptions == nil {
 		c.subscriptions = make(map[string]struct{})
 	}
 	c.subscriptions[channel] = struct{}{}
+
+	subscribers := c.server.subscribers[channel]
+	if subscribers == nil {
+		subscribers = make(map[*client]struct{})
+		c.server.subscribers[channel] = subscribers
+	}
+	subscribers[c] = struct{}{}
+}
+
+// unsubscribe ends the client's subscription to channel. It does nothing if
+// the client isn't subscribed to it.
+func (c *client) unsubscribe(channel string) {
+	if _, ok := c.subscriptions[channel]; !ok {
+		return
+	}
+	delete(c.subscriptions, channel)
+
+	subscribers := c.server.subscribers[channel]
+	delete(subscribers, c)
+	if len(subscribers) == 0 {
+		delete(c.server.subscribers, channel)
+	}
+}
+
+// unsubscribeAll ends all of the client's subscriptions.
+func (c *client) unsubscribeAll() {
+	for channel := range c.subscriptions {
+		c.unsubscribe(channel)
+	}
+}
+
+// cmdPublish implements PUBLISH channel message: it replies with the number
+// of clients that are subscribed to the channel, which is 0 for a channel
+// nobody listens to. The message can be any string.
+//
+// Subscriptions are per server: the clients counted are the ones subscribed
+// through this server, and nothing is passed on to its replicas.
+func cmdPublish(c *client, args []string) []byte {
+	return integerReply(len(c.server.subscribers[args[0]]))
 }

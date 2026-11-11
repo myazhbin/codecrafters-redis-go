@@ -78,11 +78,12 @@ func (s *Server) handleConnection(conn net.Conn) {
 	defer cancel()
 	c := &client{server: s, conn: conn, ctx: ctx}
 	defer func() {
-		// A client that is gone must not stay registered as a watcher, nor
-		// as a replica.
+		// A client that is gone must not stay registered as a watcher, as a
+		// subscriber or as a replica.
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		c.unwatch()
+		c.unsubscribeAll()
 		s.removeReplica(c)
 	}()
 
