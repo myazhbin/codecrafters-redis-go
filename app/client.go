@@ -23,6 +23,16 @@ type client struct {
 	// started. Like the rest of the client's state, it belongs to this
 	// connection only: other clients have their own.
 	inTransaction bool
+	// queued holds the commands received since MULTI, in order. They are not
+	// executed until the transaction is.
+	queued []queuedCommand
+}
+
+// queuedCommand is a command waiting in a transaction.
+type queuedCommand struct {
+	cmd command
+	// args are the command's arguments, without the command name.
+	args []string
 }
 
 // request is something read from the client's connection: either a command,

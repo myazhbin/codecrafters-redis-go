@@ -21,6 +21,10 @@ type command struct {
 	// name. A negative value means "at least -arity".
 	arity   int
 	handler handler
+	// immediate is set for the commands that control transactions: they are
+	// executed right away even inside a transaction, where every other
+	// command is queued instead.
+	immediate bool
 }
 
 // commands maps upper-case command names to their implementation.
@@ -43,8 +47,8 @@ var commands = map[string]command{
 	"XRANGE": {arity: 4, handler: cmdXRange},
 	"XREAD":  {arity: -4, handler: cmdXRead},
 
-	"MULTI": {arity: 1, handler: cmdMulti},
-	"EXEC":  {arity: 1, handler: cmdExec},
+	"MULTI": {arity: 1, handler: cmdMulti, immediate: true},
+	"EXEC":  {arity: 1, handler: cmdExec, immediate: true},
 }
 
 // execute runs a single command sent by the client and returns the reply to
@@ -62,6 +66,13 @@ func (c *client) execute(args []string) []byte {
 
 	c.server.mu.Lock()
 	defer c.server.mu.Unlock()
+
+	// Inside a transaction commands are only recorded: they have no effect,
+	// and nothing is read, before the transaction is executed.
+	if c.inTransaction && !cmd.immediate {
+		c.queued = append(c.queued, queuedCommand{cmd: cmd, args: args[1:]})
+		return simpleString("QUEUED")
+	}
 	return cmd.handler(c, args[1:])
 }
 

@@ -246,3 +246,21 @@ func array(items ...string) string {
 func entryReply(id string, fields ...string) string {
 	return array(bulk(id), bulkArray(fields...))
 }
+
+// drainPendingReply discards whatever the server has already sent on conn.
+// It's for tests that don't care about the content of a reply.
+func drainPendingReply(t *testing.T, conn net.Conn) {
+	t.Helper()
+
+	buf := make([]byte, 4096)
+	for {
+		conn.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+		if _, err := conn.Read(buf); err != nil {
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
+				return
+			}
+			t.Fatalf("draining the connection: %v", err)
+		}
+	}
+}
