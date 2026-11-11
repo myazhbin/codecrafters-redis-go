@@ -26,8 +26,13 @@ var infoSections = []infoSection{
 
 // replicationInfo returns the fields of the "Replication" section of INFO.
 func (s *Server) replicationInfo() []infoField {
+	// Redis still calls replicas "slaves" in this report.
+	role := "master"
+	if s.isReplica() {
+		role = "slave"
+	}
 	return []infoField{
-		{"role", "master"},
+		{"role", role},
 	}
 }
 

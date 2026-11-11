@@ -14,6 +14,20 @@ const defaultPort = 6379
 type config struct {
 	// port is the TCP port the server listens on.
 	port int
+	// replicaOf is the master the server replicates, or nil if the server is
+	// a master itself.
+	replicaOf *masterAddress
+}
+
+// masterAddress tells a replica where its master is.
+type masterAddress struct {
+	host string
+	port int
+}
+
+// String returns the address in the "host:port" form used to dial it.
+func (m masterAddress) String() string {
+	return net.JoinHostPort(m.host, strconv.Itoa(m.port))
 }
 
 // defaultConfig returns the configuration of a server started without any
@@ -46,6 +60,26 @@ func parseConfig(args []string) (config, error) {
 				return config{}, err
 			}
 			cfg.port = port
+		case "replicaof":
+			// The master is given as "host port", either as a single
+			// argument or as two of them.
+			if i+1 >= len(args) {
+				return config{}, fmt.Errorf("option --%s needs a value", name)
+			}
+			i++
+			parts := strings.Fields(args[i])
+			if len(parts) == 1 && i+1 < len(args) && !strings.HasPrefix(args[i+1], "--") {
+				i++
+				parts = append(parts, strings.Fields(args[i])...)
+			}
+			if len(parts) != 2 {
+				return config{}, fmt.Errorf("option --%s needs a master host and port, such as \"localhost 6379\"", name)
+			}
+			port, err := parsePort(parts[1])
+			if err != nil {
+				return config{}, err
+			}
+			cfg.replicaOf = &masterAddress{host: parts[0], port: port}
 		default:
 			return config{}, fmt.Errorf("unknown option %q", arg)
 		}
