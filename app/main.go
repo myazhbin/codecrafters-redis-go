@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bufio"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -22,14 +24,19 @@ func main() {
 	handleConnection(conn)
 }
 
-// handleConnection waits for the client to send a command and replies with a
-// hardcoded PONG, whatever the command was.
+// handleConnection reads commands from the client one after another until it
+// disconnects, replying to each of them with a hardcoded PONG.
 func handleConnection(conn net.Conn) {
 	defer conn.Close()
 
-	buf := make([]byte, 1024)
-	if _, err := conn.Read(buf); err != nil {
-		return
+	reader := bufio.NewReader(conn)
+	for {
+		if _, err := readCommand(reader); err != nil {
+			if errors.Is(err, errProtocol) {
+				fmt.Fprintf(conn, "-ERR %s\r\n", err)
+			}
+			return
+		}
+		conn.Write([]byte("+PONG\r\n"))
 	}
-	conn.Write([]byte("+PONG\r\n"))
 }
