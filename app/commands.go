@@ -27,6 +27,7 @@ var commands = map[string]command{
 	"RPUSH":  {arity: -3, handler: cmdRPush},
 	"LPUSH":  {arity: -3, handler: cmdLPush},
 	"LRANGE": {arity: 4, handler: cmdLRange},
+	"LLEN":   {arity: 2, handler: cmdLLen},
 }
 
 // execute runs a single client command and returns the reply to send back.

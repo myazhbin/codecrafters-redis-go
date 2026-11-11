@@ -79,6 +79,19 @@ func cmdLPush(s *Server, args []string) []byte {
 	return integerReply(len(l.items))
 }
 
+// cmdLLen implements LLEN key: it replies with the number of elements of the
+// list stored at key, which is 0 if the key doesn't exist.
+func cmdLLen(s *Server, args []string) []byte {
+	l, err := s.store.getList(args[0])
+	if err != nil {
+		return errorReply(err.Error())
+	}
+	if l == nil {
+		return integerReply(0)
+	}
+	return integerReply(len(l.items))
+}
+
 // cmdLRange implements LRANGE key start stop: it replies with the elements of
 // the list stored at key from index start to index stop, both included.
 // Negative indexes count from the end of the list. A list that doesn't exist
