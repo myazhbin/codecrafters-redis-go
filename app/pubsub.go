@@ -1,5 +1,7 @@
 package main
 
+import "sort"
+
 // This file implements Pub/Sub: clients subscribe to channels to receive the
 // messages that other clients publish to them.
 
@@ -87,6 +89,42 @@ func (c *client) unsubscribeAll() {
 	for channel := range c.subscriptions {
 		c.unsubscribe(channel)
 	}
+}
+
+// cmdUnsubscribe implements UNSUBSCRIBE [channel ...]: it ends the client's
+// subscriptions to the channels, or all of its subscriptions if no channel is
+// given. A client that isn't subscribed to anything anymore is out of
+// subscribed mode.
+//
+// Each channel gets a reply of its own, in the order the channels are given:
+// an array made of "unsubscribe", the name of the channel and the number of
+// channels the client is still subscribed to at that point. A channel the
+// client isn't subscribed to gets the same reply, with a count that doesn't
+// change. Without channels, the replies come in the alphabetical order of the
+// channels, and a client that had no subscription gets a single one, where a
+// null string stands for the channel.
+func cmdUnsubscribe(c *client, args []string) []byte {
+	channels := args
+	if len(channels) == 0 {
+		for channel := range c.subscriptions {
+			channels = append(channels, channel)
+		}
+		sort.Strings(channels)
+	}
+	if len(channels) == 0 {
+		return arrayReply(bulkString("unsubscribe"), nullBulkString, integerReply(0))
+	}
+
+	var reply []byte
+	for _, channel := range channels {
+		c.unsubscribe(channel)
+		reply = append(reply, arrayReply(
+			bulkString("unsubscribe"),
+			bulkString(channel),
+			integerReply(len(c.subscriptions)),
+		)...)
+	}
+	return reply
 }
 
 // cmdPublish implements PUBLISH channel message: it sends the message, which

@@ -71,8 +71,9 @@ var commands = map[string]command{
 	"WATCH":   {arity: -2, handler: cmdWatch, immediate: true},
 	"UNWATCH": {arity: 1, handler: cmdUnwatch},
 
-	"SUBSCRIBE": {arity: -2, handler: cmdSubscribe, pubsub: true},
-	"PUBLISH":   {arity: 3, handler: cmdPublish},
+	"SUBSCRIBE":   {arity: -2, handler: cmdSubscribe, pubsub: true},
+	"UNSUBSCRIBE": {arity: -1, handler: cmdUnsubscribe, pubsub: true},
+	"PUBLISH":     {arity: 3, handler: cmdPublish},
 }
 
 // execute runs a single command sent by the client and returns the reply to
