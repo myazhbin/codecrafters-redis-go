@@ -110,6 +110,80 @@ func parseScore(s string) (float64, bool) {
 	return score, true
 }
 
+// formatScore writes a score the way Redis does in its replies:
+//
+//   - an infinite score is "inf" or "-inf";
+//   - a score that is a whole number is written as an integer ("20"), as long
+//     as a 64-bit integer holds it comfortably;
+//   - any other score is written with the fewest digits that tell it apart
+//     from every other 64-bit floating-point number ("30.1"). Scientific
+//     notation is used when that takes fewer characters than spelling the
+//     number out, which is for very small and very large scores ("1.5e-7",
+//     "1e+21").
+//
+// What it returns is always parsed back by parseScore to the same score.
+func formatScore(score float64) string {
+	switch {
+	case math.IsInf(score, 1):
+		return "inf"
+	case math.IsInf(score, -1):
+		return "-inf"
+	case score == 0:
+		if math.Signbit(score) {
+			return "-0"
+		}
+		return "0"
+	}
+
+	// Up to 2^62, a floating-point number without a fractional part is
+	// exactly a 64-bit integer.
+	const maxWhole = 1 << 62
+	if score >= -maxWhole && score <= maxWhole {
+		if n := int64(score); float64(n) == score {
+			return strconv.FormatInt(n, 10)
+		}
+	}
+
+	// The digits of the score, without leading or trailing zeros, and the
+	// power of ten its first digit stands for: d.ddd × 10^exp.
+	mantissa, rawExp, _ := strings.Cut(strconv.FormatFloat(math.Abs(score), 'e', -1, 64), "e")
+	digits := strings.Replace(mantissa, ".", "", 1)
+	exp, _ := strconv.Atoi(rawExp)
+	// last is the power of ten the last digit stands for.
+	last := exp - (len(digits) - 1)
+
+	var b strings.Builder
+	maxTrailingZeros := 7
+	if score < 0 {
+		b.WriteByte('-')
+		maxTrailingZeros = 6
+	}
+	switch {
+	case last >= 0 && exp < len(digits)+maxTrailingZeros:
+		// A whole number, short enough to be written in full.
+		b.WriteString(digits)
+		b.WriteString(strings.Repeat("0", last))
+	case last < 0 && (last > -7 || exp > -4 && exp < 4):
+		// A number with a fractional part, short enough likewise.
+		if point := len(digits) + last; point > 0 {
+			b.WriteString(digits[:point] + "." + digits[point:])
+		} else {
+			b.WriteString("0." + strings.Repeat("0", -point) + digits)
+		}
+	default:
+		b.WriteString(digits[:1])
+		if len(digits) > 1 {
+			b.WriteString("." + digits[1:])
+		}
+		if exp < 0 {
+			b.WriteString("e-" + strconv.Itoa(-exp))
+		} else {
+			b.WriteString("e+" + strconv.Itoa(exp))
+		}
+	}
+	return b.String()
+}
+
 // cmdZAdd implements ZADD key score member [score member ...]: it adds the
 // members to the sorted set stored at key with the scores they are given,
 // creating the set if needed. A member that is already in the set is given
@@ -217,4 +291,25 @@ func cmdZCard(c *client, args []string) []byte {
 		return integerReply(0)
 	}
 	return integerReply(len(z.ordered))
+}
+
+// cmdZScore implements ZSCORE key member: it replies with the score of the
+// member in the sorted set stored at key, as a bulk string. See formatScore
+// for how the score is written.
+//
+// The reply is a null bulk string if the member isn't in the set, or if the
+// key doesn't exist.
+func cmdZScore(c *client, args []string) []byte {
+	z, err := c.server.store.getSortedSet(args[0])
+	if err != nil {
+		return errorReply(err.Error())
+	}
+	if z == nil {
+		return nullBulkString
+	}
+	score, ok := z.scores[args[1]]
+	if !ok {
+		return nullBulkString
+	}
+	return bulkString(formatScore(score))
 }
