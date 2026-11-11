@@ -211,6 +211,86 @@ func TestConcurrentRPushLosesNoElement(t *testing.T) {
 	}
 }
 
+func TestRPushMultipleElements(t *testing.T) {
+	srv := NewServer()
+	conn := dial(t, startServer(t, srv))
+
+	// Several elements can create a list in one go...
+	do(t, conn, "RPUSH", "list_key", "element1", "element2", "element3")
+	expectReply(t, conn, ":3\r\n")
+
+	// ...and be appended to an existing one.
+	do(t, conn, "RPUSH", "list_key", "element4", "element5")
+	expectReply(t, conn, ":5\r\n")
+
+	// Elements are appended left to right, in the order they were given.
+	want := []string{"element1", "element2", "element3", "element4", "element5"}
+	if got := listItems(t, srv, "list_key"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("list = %q, want %q", got, want)
+	}
+}
+
+func TestRPushMixesSingleAndMultipleElements(t *testing.T) {
+	srv := NewServer()
+	conn := dial(t, startServer(t, srv))
+
+	do(t, conn, "RPUSH", "another_list", "bar", "baz")
+	expectReply(t, conn, ":2\r\n")
+	do(t, conn, "RPUSH", "another_list", "foo", "bar", "baz")
+	expectReply(t, conn, ":5\r\n")
+	do(t, conn, "RPUSH", "another_list", "single")
+	expectReply(t, conn, ":6\r\n")
+
+	want := []string{"bar", "baz", "foo", "bar", "baz", "single"}
+	if got := listItems(t, srv, "another_list"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("list = %q, want %q", got, want)
+	}
+}
+
+func TestRPushManyElementsAtOnce(t *testing.T) {
+	srv := NewServer()
+	conn := dial(t, startServer(t, srv))
+
+	const count = 500
+	elements := make([]string, count)
+	for i := range elements {
+		elements[i] = "element-" + strconv.Itoa(i)
+	}
+
+	do(t, conn, append([]string{"RPUSH", "big"}, elements...)...)
+	expectReply(t, conn, ":500\r\n")
+
+	if got := listItems(t, srv, "big"); !reflect.DeepEqual(got, elements) {
+		t.Fatalf("list holds %d elements that differ from the %d pushed ones", len(got), count)
+	}
+}
+
+func TestRPushMultipleEdgeCaseElements(t *testing.T) {
+	srv := NewServer()
+	conn := dial(t, startServer(t, srv))
+
+	// Elements are binary-safe strings; empty and duplicate ones are fine.
+	elements := []string{"", "with space", "a\r\nb", "\x00\xff", "dup", "dup", ""}
+	do(t, conn, append([]string{"RPUSH", "list_key"}, elements...)...)
+	expectReply(t, conn, ":7\r\n")
+
+	if got := listItems(t, srv, "list_key"); !reflect.DeepEqual(got, elements) {
+		t.Fatalf("list = %q, want %q", got, elements)
+	}
+}
+
+func TestRPushMultipleElementsAgainstStringIsWrongType(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	do(t, conn, "SET", "text", "value")
+	expectReply(t, conn, "+OK\r\n")
+
+	do(t, conn, "RPUSH", "text", "a", "b", "c")
+	expectReply(t, conn, wrongTypeError)
+	do(t, conn, "GET", "text")
+	expectReply(t, conn, "$5\r\nvalue\r\n")
+}
+
 func TestRPushCommandNameIsCaseInsensitive(t *testing.T) {
 	conn := dial(t, startTestServer(t))
 
