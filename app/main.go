@@ -20,7 +20,17 @@ func main() {
 	}
 	defer l.Close()
 
-	if err := NewServerWithConfig(cfg).Serve(l); err != nil {
+	server := NewServerWithConfig(cfg)
+	if server.isReplica() {
+		// The replica serves its own clients while it follows its master.
+		go func() {
+			if err := server.followMaster(); err != nil {
+				fmt.Println("Replication stopped:", err)
+			}
+		}()
+	}
+
+	if err := server.Serve(l); err != nil {
 		fmt.Println("Error accepting connection: ", err.Error())
 		os.Exit(1)
 	}
