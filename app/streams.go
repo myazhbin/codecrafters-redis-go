@@ -370,8 +370,8 @@ func parseXReadArgs(args []string) (xreadArgs, []byte) {
 		switch option := strings.ToUpper(args[i]); {
 		case option == "BLOCK" && hasMore:
 			i++
-			ms, err := strconv.ParseInt(args[i], 10, 64)
-			if err != nil {
+			ms, ok := parseInt(args[i])
+			if !ok {
 				return parsed, errorReply("ERR timeout is not an integer or out of range")
 			}
 			if ms < 0 {

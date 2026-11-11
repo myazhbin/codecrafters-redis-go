@@ -49,9 +49,9 @@ func cmdSet(c *client, args []string) []byte {
 // key expires at. unit is "EX" (seconds) or "PX" (milliseconds). On invalid
 // input it returns the error reply to send instead.
 func parseExpiry(unit, ttl string, now time.Time) (time.Time, []byte) {
-	n, err := strconv.ParseInt(ttl, 10, 64)
-	if err != nil {
-		return noExpiry, errorReply("ERR value is not an integer or out of range")
+	n, ok := parseInt(ttl)
+	if !ok {
+		return noExpiry, errorReply(errNotAnInteger)
 	}
 
 	invalid := errorReply("ERR invalid expire time in 'set' command")
@@ -84,4 +84,36 @@ func cmdGet(c *client, args []string) []byte {
 		return nullBulkString
 	}
 	return bulkString(value)
+}
+
+// cmdIncr implements INCR key: it adds one to the integer stored at key and
+// replies with the new value. A key that doesn't exist counts as 0, so its
+// value becomes 1.
+//
+// The value is a string holding the decimal representation of a signed 64-bit
+// integer. The expiry of the key, if any, is left untouched.
+func cmdIncr(c *client, args []string) []byte {
+	store := c.server.store
+	key := args[0]
+
+	var n int64
+	expiresAt := noExpiry
+	if e, exists := store.lookup(key); exists {
+		value, isString := e.value.(string)
+		if !isString {
+			return errorReply(errWrongType.Error())
+		}
+		var isInteger bool
+		if n, isInteger = parseInt(value); !isInteger {
+			return errorReply(errNotAnInteger)
+		}
+		expiresAt = e.expiresAt
+	}
+
+	if n == math.MaxInt64 {
+		return errorReply("ERR increment or decrement would overflow")
+	}
+	n++
+	store.setString(key, strconv.FormatInt(n, 10), expiresAt)
+	return integerReply(n)
 }

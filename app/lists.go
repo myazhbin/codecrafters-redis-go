@@ -180,9 +180,8 @@ func cmdLPop(c *client, args []string) []byte {
 	hasCount := len(args) == 2
 	count := 1
 	if hasCount {
-		var err error
-		count, err = strconv.Atoi(args[1])
-		if err != nil || count < 0 {
+		var ok bool
+		if count, ok = parseIndex(args[1]); !ok || count < 0 {
 			return errorReply("ERR value is out of range, must be positive")
 		}
 	}
@@ -322,10 +321,10 @@ func cmdLLen(c *client, args []string) []byte {
 // Negative indexes count from the end of the list. A list that doesn't exist
 // is treated as an empty one.
 func cmdLRange(c *client, args []string) []byte {
-	start, startErr := strconv.Atoi(args[1])
-	stop, stopErr := strconv.Atoi(args[2])
-	if startErr != nil || stopErr != nil {
-		return errorReply("ERR value is not an integer or out of range")
+	start, startOK := parseIndex(args[1])
+	stop, stopOK := parseIndex(args[2])
+	if !startOK || !stopOK {
+		return errorReply(errNotAnInteger)
 	}
 
 	l, err := c.server.store.getList(args[0])

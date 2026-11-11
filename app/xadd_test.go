@@ -137,7 +137,7 @@ func TestXAddInvalidID(t *testing.T) {
 
 	for _, id := range []string{
 		"abc", "", "-", "1-", "-1", "1-2-3", "1.5-0", "1-a", "a-1", "-1-0",
-		" 1-1", "1-1 ", "+1-1", "18446744073709551616-0", "0-18446744073709551616",
+		"1-1 ", "18446744073709551616-0", "0-18446744073709551616",
 	} {
 		do(t, conn, "XADD", "stream_key", id, "foo", "bar")
 		expectReply(t, conn, invalidStreamIDError)

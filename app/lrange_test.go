@@ -32,7 +32,6 @@ func TestLRange(t *testing.T) {
 		{"start past the end", "42", "100", nil},
 		{"start greater than stop", "3", "1", nil},
 		{"start greater than stop, both past the end", "9", "7", nil},
-		{"indexes with an explicit plus sign", "+1", "+2", []string{"b", "c"}},
 	}
 
 	for _, tt := range tests {
@@ -75,7 +74,6 @@ func TestLRangeNegativeIndexes(t *testing.T) {
 		{"negative start resolving after a positive stop", "-1", "0", nil},
 		{"positive start past the end with negative stop", "5", "-1", nil},
 		{"positive start resolving after a negative stop", "4", "-3", nil},
-		{"minus zero is zero", "-0", "-0", []string{"a"}},
 	}
 
 	for _, tt := range tests {
@@ -214,6 +212,13 @@ func TestLRangeInvalidIndexes(t *testing.T) {
 	expectReply(t, conn, notAnInteger)
 	do(t, conn, "LRANGE", "list_key", "0", "99999999999999999999999")
 	expectReply(t, conn, notAnInteger)
+	// Only the canonical way of writing an integer is accepted.
+	for _, index := range []string{"+1", "01", "-0", " 1", "1 ", "0x1", "1e0"} {
+		do(t, conn, "LRANGE", "list_key", index, "2")
+		expectReply(t, conn, notAnInteger)
+		do(t, conn, "LRANGE", "list_key", "0", index)
+		expectReply(t, conn, notAnInteger)
+	}
 
 	// Indexes are validated even when the list doesn't exist.
 	do(t, conn, "LRANGE", "missing", "a", "b")

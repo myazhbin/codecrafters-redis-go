@@ -243,7 +243,7 @@ func TestLPopWithInvalidCount(t *testing.T) {
 	expectReply(t, conn, ":3\r\n")
 
 	const outOfRange = "-ERR value is out of range, must be positive\r\n"
-	for _, count := range []string{"-1", "-100", "two", "1.5", "", "99999999999999999999"} {
+	for _, count := range []string{"-1", "-100", "two", "1.5", "", "99999999999999999999", "+1", "01", " 1"} {
 		do(t, conn, "LPOP", "list_key", count)
 		expectReply(t, conn, outOfRange)
 	}

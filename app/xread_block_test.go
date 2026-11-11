@@ -285,6 +285,8 @@ func TestXReadBlockOptionSyntax(t *testing.T) {
 	expectReply(t, conn, "-ERR timeout is not an integer or out of range\r\n")
 	do(t, conn, "XREAD", "BLOCK", "-1", "STREAMS", "stream_key", "0-0")
 	expectReply(t, conn, "-ERR timeout is negative\r\n")
+	do(t, conn, "XREAD", "BLOCK", "+100", "STREAMS", "stream_key", "0-0")
+	expectReply(t, conn, "-ERR timeout is not an integer or out of range\r\n")
 
 	// BLOCK without STREAMS, or as the last word.
 	do(t, conn, "XREAD", "BLOCK", "100", "stream_key", "0-0")
