@@ -21,6 +21,10 @@ func main() {
 	defer l.Close()
 
 	server := NewServerWithConfig(cfg)
+	if err := server.loadRDBFile(); err != nil {
+		fmt.Println("Failed to load the RDB file:", err)
+		os.Exit(1)
+	}
 	if server.isReplica() {
 		// The replica serves its own clients while it follows its master.
 		go func() {

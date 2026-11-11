@@ -93,6 +93,18 @@ func (st *store) modified(key string) {
 	}
 }
 
+// keys returns the keys that exist, in no particular order.
+func (st *store) keys() []string {
+	keys := make([]string, 0, len(st.entries))
+	for key := range st.entries {
+		// Looking the key up takes care of the ones that have expired.
+		if _, ok := st.lookup(key); ok {
+			keys = append(keys, key)
+		}
+	}
+	return keys
+}
+
 // delete removes key from the keyspace. Deleting a key that doesn't exist is
 // a no-op.
 func (st *store) delete(key string) {

@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"net"
-	"path"
 	"strconv"
 	"strings"
 )
@@ -155,8 +154,7 @@ func cmdConfig(c *client, args []string) []byte {
 		var reply []string
 		for _, parameter := range configParameters {
 			for _, pattern := range args[1:] {
-				// A malformed pattern matches nothing.
-				if ok, _ := path.Match(strings.ToLower(pattern), parameter.name); ok {
+				if globMatch(strings.ToLower(pattern), parameter.name) {
 					reply = append(reply, parameter.name, parameter.value(c.server.cfg))
 					break
 				}
