@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"time"
 )
 
 // isReplica reports whether the server replicates a master, as opposed to
@@ -41,6 +42,15 @@ type Server struct {
 	// aofSyncs counts the times the append-only file was flushed to the
 	// disk.
 	aofSyncs int
+	// aofDirty is set when the append-only file holds data that hasn't been
+	// flushed to the disk yet.
+	aofDirty bool
+	// aofSyncInterval is how often the append-only file is flushed with the
+	// "everysec" policy.
+	aofSyncInterval time.Duration
+	// aofStop is closed to stop the goroutine that flushes the append-only
+	// file periodically, if there is one.
+	aofStop chan struct{}
 	// masterOffset is, on a replica, the number of bytes of the master's
 	// replication stream the replica has processed so far.
 	masterOffset int64
@@ -74,14 +84,15 @@ func NewServer() *Server {
 // cfg, that is ready to Serve.
 func NewServerWithConfig(cfg config) *Server {
 	s := &Server{
-		cfg:           cfg,
-		replID:        newReplicationID(),
-		store:         newStore(),
-		listWaiters:   make(waitQueues[*listWaiter]),
-		streamWaiters: make(waitQueues[*streamWaiter]),
-		watchers:      make(map[string]map[*client]struct{}),
-		replicas:      make(map[*client]struct{}),
-		ackWaiters:    make(map[*ackWaiter]struct{}),
+		cfg:             cfg,
+		replID:          newReplicationID(),
+		aofSyncInterval: time.Second,
+		store:           newStore(),
+		listWaiters:     make(waitQueues[*listWaiter]),
+		streamWaiters:   make(waitQueues[*streamWaiter]),
+		watchers:        make(map[string]map[*client]struct{}),
+		replicas:        make(map[*client]struct{}),
+		ackWaiters:      make(map[*ackWaiter]struct{}),
 	}
 	s.store.onModify = s.keyModified
 	return s

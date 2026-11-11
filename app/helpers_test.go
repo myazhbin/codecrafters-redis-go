@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"errors"
 	"io"
 	"net"
@@ -262,5 +263,24 @@ func drainPendingReply(t *testing.T, conn net.Conn) {
 			}
 			t.Fatalf("draining the connection: %v", err)
 		}
+	}
+}
+
+// parseCommands splits a sequence of commands, each encoded as a RESP array
+// of bulk strings, the way they are logged and propagated.
+func parseCommands(t *testing.T, data string) [][]string {
+	t.Helper()
+
+	var commands [][]string
+	r := bufio.NewReader(strings.NewReader(data))
+	for {
+		args, err := readCommand(r)
+		if err == io.EOF {
+			return commands
+		}
+		if err != nil {
+			t.Fatalf("parsing commands: %v (after %d commands)", err, len(commands))
+		}
+		commands = append(commands, args)
 	}
 }

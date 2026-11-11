@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // This file implements AOF persistence: logging the commands that modify the
@@ -91,7 +92,46 @@ func (s *Server) setupAOF() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.aof = file
+	if s.cfg.appendFsync == "everysec" {
+		s.aofStop = make(chan struct{})
+		go s.syncAOFPeriodically(file, s.aofSyncInterval, s.aofStop)
+	}
 	return nil
+}
+
+// syncAOFPeriodically flushes the append-only file to the disk at regular
+// intervals, when something was written to it in the meantime, until stop is
+// closed. It is what the "everysec" policy is about: at most one interval's
+// worth of writes can be lost in a crash, and no write has to wait for the
+// disk.
+func (s *Server) syncAOFPeriodically(file *os.File, interval time.Duration, stop <-chan struct{}) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+		}
+
+		s.mu.Lock()
+		dirty := s.aofDirty
+		s.aofDirty = false
+		s.mu.Unlock()
+		if !dirty {
+			continue
+		}
+
+		// The disk is waited for without holding the lock: the server keeps
+		// serving its clients meanwhile.
+		if err := file.Sync(); err != nil {
+			continue // the file was closed, or the disk is failing
+		}
+		s.mu.Lock()
+		s.aofSyncs++
+		s.mu.Unlock()
+	}
 }
 
 // incrFileOfManifest returns the name of the incremental append-only file
@@ -139,7 +179,9 @@ func incrFileOfManifest(manifest string) (name string, found bool, err error) {
 //
 // With the "always" policy the file is flushed to the disk before the call
 // returns, and so before the client that sent the command gets its reply: a
-// write that was acknowledged can't be lost.
+// write that was acknowledged can't be lost. With the other policies the
+// flush is left for later: to a periodic task with "everysec", to the
+// operating system with "no".
 func (s *Server) appendToAOF(data []byte) {
 	if s.aof == nil {
 		return
@@ -148,13 +190,15 @@ func (s *Server) appendToAOF(data []byte) {
 		fmt.Fprintln(os.Stderr, "Failed to write to the append-only file:", err)
 		return
 	}
-	if s.cfg.appendFsync == "always" {
-		if err := s.aof.Sync(); err != nil {
-			fmt.Fprintln(os.Stderr, "Failed to flush the append-only file:", err)
-			return
-		}
-		s.aofSyncs++
+	if s.cfg.appendFsync != "always" {
+		s.aofDirty = true
+		return
 	}
+	if err := s.aof.Sync(); err != nil {
+		fmt.Fprintln(os.Stderr, "Failed to flush the append-only file:", err)
+		return
+	}
+	s.aofSyncs++
 }
 
 // closeAOF closes the append-only file, if it is open.
@@ -164,6 +208,10 @@ func (s *Server) closeAOF() error {
 
 	if s.aof == nil {
 		return nil
+	}
+	if s.aofStop != nil {
+		close(s.aofStop)
+		s.aofStop = nil
 	}
 	err := s.aof.Close()
 	s.aof = nil
