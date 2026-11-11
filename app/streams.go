@@ -3,6 +3,7 @@ package main
 import (
 	"cmp"
 	"errors"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -63,6 +64,35 @@ func parseStreamID(s string) (streamID, error) {
 	return streamID{ms: ms, seq: seq}, nil
 }
 
+// newEntryID is the ID argument of XADD: it describes the ID to give to a new
+// entry, parts of which may be left for the stream to choose.
+type newEntryID struct {
+	// id is the requested ID. Its sequence number is meaningless when
+	// autoSeq is set.
+	id streamID
+	// autoSeq is set for IDs written as "<milliseconds>-*": the stream picks
+	// the sequence number.
+	autoSeq bool
+}
+
+// parseNewEntryID parses the ID argument of XADD, which is either an explicit
+// ID or an ID whose sequence number is "*".
+func parseNewEntryID(s string) (newEntryID, error) {
+	if msPart, ok := strings.CutSuffix(s, "-*"); ok {
+		ms, err := strconv.ParseUint(msPart, 10, 64)
+		if err != nil {
+			return newEntryID{}, errInvalidStreamID
+		}
+		return newEntryID{id: streamID{ms: ms}, autoSeq: true}, nil
+	}
+
+	id, err := parseStreamID(s)
+	if err != nil {
+		return newEntryID{}, err
+	}
+	return newEntryID{id: id}, nil
+}
+
 // streamEntry is an entry of a stream: an ID and a set of field-value pairs.
 type streamEntry struct {
 	id streamID
@@ -80,15 +110,32 @@ type stream struct {
 	lastID streamID
 }
 
-// add appends an entry to the stream. It fails with errStreamIDTooSmall, and
-// adds nothing, if id is not strictly greater than the ID of the last entry.
-func (st *stream) add(id streamID, fields []string) error {
+// add appends an entry to the stream and returns its ID, which is the one
+// asked for by spec with the missing parts filled in.
+//
+// It fails with errStreamIDTooSmall, and adds nothing, if that ID is not
+// strictly greater than the ID of the last entry.
+func (st *stream) add(spec newEntryID, fields []string) (streamID, error) {
+	id := spec.id
+	if spec.autoSeq {
+		// Sequence numbers start at 0 for each new millisecond, and otherwise
+		// continue from the last entry's. An empty stream is no exception:
+		// its last ID is 0-0, which is why "0-*" gives 0-1.
+		id.seq = 0
+		if id.ms == st.lastID.ms {
+			if st.lastID.seq == math.MaxUint64 {
+				return streamID{}, errStreamIDTooSmall
+			}
+			id.seq = st.lastID.seq + 1
+		}
+	}
+
 	if id.compare(st.lastID) <= 0 {
-		return errStreamIDTooSmall
+		return streamID{}, errStreamIDTooSmall
 	}
 	st.entries = append(st.entries, streamEntry{id: id, fields: fields})
 	st.lastID = id
-	return nil
+	return id, nil
 }
 
 // cmdXAdd implements XADD key id field value [field value ...]: it appends
@@ -96,19 +143,21 @@ func (st *stream) add(id streamID, fields []string) error {
 // replies with the ID of the new entry.
 //
 // The ID must be greater than the ID of every entry already in the stream,
-// and greater than 0-0.
+// and greater than 0-0. It is given either in full ("5-3") or with "*" as its
+// sequence number ("5-*"), in which case the server picks the next sequence
+// number available for that millisecond.
 func cmdXAdd(c *client, args []string) []byte {
 	store := c.server.store
 	key, rawID, fields := args[0], args[1], args[2:]
 
-	id, err := parseStreamID(rawID)
+	spec, err := parseNewEntryID(rawID)
 	if err != nil {
 		return errorReply(err.Error())
 	}
 	if len(fields)%2 != 0 {
 		return wrongArgumentCountError("XADD")
 	}
-	if id == (streamID{}) {
+	if !spec.autoSeq && spec.id == (streamID{}) {
 		return errorReply(errStreamIDIsZero.Error())
 	}
 
@@ -123,7 +172,8 @@ func cmdXAdd(c *client, args []string) []byte {
 		st = &stream{}
 	}
 
-	if err := st.add(id, fields); err != nil {
+	id, err := st.add(spec, fields)
+	if err != nil {
 		return errorReply(err.Error())
 	}
 	if created {
