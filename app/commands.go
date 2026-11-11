@@ -37,6 +37,7 @@ var commands = map[string]command{
 
 	"XADD":   {arity: -5, handler: cmdXAdd},
 	"XRANGE": {arity: 4, handler: cmdXRange},
+	"XREAD":  {arity: -4, handler: cmdXRead},
 }
 
 // execute runs a single command sent by the client and returns the reply to

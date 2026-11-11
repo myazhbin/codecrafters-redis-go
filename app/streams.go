@@ -210,6 +210,17 @@ func (st *stream) between(start, end streamID) []streamEntry {
 	return st.entries[from:to]
 }
 
+// after returns the entries whose ID is strictly greater than id, in the
+// order of their IDs.
+//
+// The result shares its memory with the stream and must not be modified.
+func (st *stream) after(id streamID) []streamEntry {
+	from := sort.Search(len(st.entries), func(i int) bool {
+		return st.entries[i].id.compare(id) > 0
+	})
+	return st.entries[from:]
+}
+
 // entriesReply encodes stream entries as an array with one element per entry.
 // Each element is itself an array of two elements: the ID of the entry, and
 // the array of its fields and values.
@@ -291,4 +302,57 @@ func cmdXRange(c *client, args []string) []byte {
 		return arrayReply()
 	}
 	return entriesReply(st.between(start, end))
+}
+
+// errUnbalancedXRead is returned when XREAD isn't given exactly one ID per
+// stream key.
+var errUnbalancedXRead = errors.New("ERR Unbalanced 'xread' list of streams: for each stream key an ID, '+', or '$' must be specified.")
+
+// cmdXRead implements XREAD STREAMS key [key ...] id [id ...]: for each of
+// the streams, it replies with the entries whose ID is strictly greater than
+// the ID given for that stream.
+//
+// The reply is an array with one element per stream that has such entries,
+// in the order the streams were given. Each element is an array holding the
+// key of the stream and the array of its entries. When no stream has any
+// entry to return, the reply is a null array.
+func cmdXRead(c *client, args []string) []byte {
+	store := c.server.store
+
+	if !strings.EqualFold(args[0], "STREAMS") {
+		return errorReply("ERR syntax error")
+	}
+	// What follows STREAMS is the list of keys, then one ID for each of them.
+	rest := args[1:]
+	if len(rest)%2 != 0 {
+		return errorReply(errUnbalancedXRead.Error())
+	}
+	keys, rawIDs := rest[:len(rest)/2], rest[len(rest)/2:]
+
+	// Every argument is validated before anything is read.
+	streams := make([]*stream, len(keys))
+	ids := make([]streamID, len(keys))
+	for i, key := range keys {
+		var err error
+		if streams[i], err = store.getStream(key); err != nil {
+			return errorReply(err.Error())
+		}
+		if ids[i], err = parseStreamID(rawIDs[i], 0); err != nil {
+			return errorReply(err.Error())
+		}
+	}
+
+	var results [][]byte
+	for i, key := range keys {
+		if streams[i] == nil {
+			continue
+		}
+		if entries := streams[i].after(ids[i]); len(entries) > 0 {
+			results = append(results, arrayReply(bulkString(key), entriesReply(entries)))
+		}
+	}
+	if len(results) == 0 {
+		return nullArray
+	}
+	return arrayReply(results...)
 }
