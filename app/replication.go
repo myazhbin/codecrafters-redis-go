@@ -108,7 +108,7 @@ func (s *Server) applyReplicationStream(conn net.Conn, r *bufio.Reader, received
 
 	// The master is a client like any other for the commands it runs, with
 	// its own transaction state.
-	master := &client{server: s, conn: conn, ctx: ctx, isMaster: true, user: s.defaultUser}
+	master := &client{server: s, conn: conn, ctx: ctx, isMaster: true, user: s.defaultUser, authenticated: true}
 	defer func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()

@@ -58,8 +58,14 @@ type client struct {
 	// subscriptions is the set of channels the client is subscribed to with
 	// SUBSCRIBE.
 	subscriptions map[string]struct{}
-	// user is the user the client is authenticated as.
+	// user is the user the client is authenticated as, or will be taken for
+	// if it is allowed in without authenticating.
 	user *user
+	// authenticated is set once the client has proved who it is, or didn't
+	// have to: when it connected at a time the default user had no password,
+	// or when it authenticated with AUTH since. It stays set for as long as
+	// the connection lasts.
+	authenticated bool
 }
 
 // queuedCommand is a command waiting in a transaction.
@@ -84,6 +90,11 @@ func (s *Server) handleConnection(conn net.Conn) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	c := &client{server: s, conn: conn, ctx: ctx, user: s.defaultUser}
+	// A connection is the default user from the start, which takes no
+	// authentication as long as that user has no password.
+	s.mu.Lock()
+	c.authenticated = s.defaultUser.nopass
+	s.mu.Unlock()
 	defer func() {
 		// A client that is gone must not stay registered as a watcher, as a
 		// subscriber or as a replica, and nothing more is sent to it.

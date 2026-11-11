@@ -32,6 +32,9 @@ type command struct {
 	// container is set for the commands whose first argument selects a
 	// subcommand, such as CONFIG GET.
 	container bool
+	// noAuth is set for the commands a client can send before it is
+	// authenticated: the ones it authenticates with.
+	noAuth bool
 }
 
 // commands maps upper-case command names to their implementation.
@@ -90,7 +93,7 @@ var commands = map[string]command{
 	"GEOSEARCH": {arity: -7, handler: cmdGeoSearch},
 
 	"ACL":  {arity: -2, handler: cmdACL, container: true},
-	"AUTH": {arity: -2, handler: cmdAuth},
+	"AUTH": {arity: -2, handler: cmdAuth, noAuth: true},
 
 	"SUBSCRIBE":   {arity: -2, handler: cmdSubscribe, pubsub: true},
 	"UNSUBSCRIBE": {arity: -1, handler: cmdUnsubscribe, pubsub: true},
@@ -130,6 +133,12 @@ func (c *client) execute(args []string) []byte {
 // of arguments, given as the client sent it, and returns its reply. It is
 // called with the server's lock held.
 func (c *client) run(cmd command, args []string) []byte {
+	// A client that hasn't authenticated can't do anything but authenticate
+	// when that is required.
+	if c.mustAuthenticate() && !cmd.noAuth {
+		return errorReply("NOAUTH Authentication required.")
+	}
+
 	// A client that is subscribed to channels uses its connection to receive
 	// what is published to them. The only commands it can still send are the
 	// ones made for that mode.

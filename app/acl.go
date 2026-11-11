@@ -48,6 +48,18 @@ func hashPassword(password string) string {
 	return hex.EncodeToString(hash[:])
 }
 
+// mustAuthenticate reports whether the client has to authenticate before it
+// can send commands: the default user has a password, and the client hasn't
+// authenticated yet.
+//
+// What matters is the default user, as it is the one connections start as.
+// The clients that connected before it had a password didn't have to
+// authenticate, and still don't. And if it has no password anymore, nobody
+// has to.
+func (c *client) mustAuthenticate() bool {
+	return !c.authenticated && !c.server.defaultUser.nopass
+}
+
 // accepts reports whether the password is one the user can be authenticated
 // with: any password is, for a user that has the nopass flag, and the
 // passwords that were added to the user otherwise.
@@ -176,7 +188,8 @@ func cmdACL(c *client, args []string) []byte {
 
 // cmdAuth implements AUTH [username] password: it authenticates the
 // connection as the user, if the password is one of the user's. Without
-// username, the user is the default one.
+// username, the user is the default one. A connection that is authenticated
+// stays so until it is closed.
 //
 // The reply is OK, or an error that doesn't tell whether it is the user or
 // the password that is wrong. The connection stays as it was after a failed
@@ -202,5 +215,6 @@ func cmdAuth(c *client, args []string) []byte {
 		return errorReply("WRONGPASS invalid username-password pair or user is disabled.")
 	}
 	c.user = u
+	c.authenticated = true
 	return simpleString("OK")
 }

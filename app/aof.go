@@ -179,7 +179,7 @@ func (s *Server) replayAOF(path string) error {
 	defer cancel()
 	// The commands are run on behalf of a client of their own, which keeps
 	// the state of the transactions found in the file.
-	replayer := &client{server: s, ctx: ctx, user: s.defaultUser}
+	replayer := &client{server: s, ctx: ctx, user: s.defaultUser, authenticated: true}
 	defer func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
