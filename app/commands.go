@@ -26,6 +26,7 @@ var commands = map[string]command{
 	"ECHO": {arity: 2, handler: cmdEcho},
 	"SET":  {arity: -3, handler: cmdSet},
 	"GET":  {arity: 2, handler: cmdGet},
+	"TYPE": {arity: 2, handler: cmdType},
 
 	"RPUSH":  {arity: -3, handler: cmdRPush},
 	"LPUSH":  {arity: -3, handler: cmdLPush},
@@ -84,4 +85,14 @@ func cmdPing(c *client, args []string) []byte {
 // cmdEcho implements ECHO message: it replies with the message itself.
 func cmdEcho(c *client, args []string) []byte {
 	return bulkString(args[0])
+}
+
+// cmdType implements TYPE key: it replies with the name of the type of the
+// value stored at key, or "none" if the key doesn't exist.
+func cmdType(c *client, args []string) []byte {
+	e, ok := c.server.store.lookup(args[0])
+	if !ok {
+		return simpleString("none")
+	}
+	return simpleString(e.typeName())
 }

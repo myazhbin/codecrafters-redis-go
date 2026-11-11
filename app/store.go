@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -21,6 +22,19 @@ type entry struct {
 	// expiresAt is the instant from which the key no longer exists. The zero
 	// time means the key never expires.
 	expiresAt time.Time
+}
+
+// typeName returns the name of the type of the entry's value, as reported by
+// the TYPE command.
+func (e entry) typeName() string {
+	switch e.value.(type) {
+	case string:
+		return "string"
+	case *list:
+		return "list"
+	default:
+		panic(fmt.Sprintf("keyspace holds a value of unexpected type %T", e.value))
+	}
 }
 
 // expired reports whether the entry is past its expiry time.
