@@ -60,6 +60,57 @@ func spreadBits(x uint32) uint64 {
 	return v
 }
 
+// squashBits is the reverse of spreadBits: it returns the number made of the
+// bits of v that are at even positions, bit 0 first.
+func squashBits(v uint64) uint32 {
+	v &= 0x5555555555555555
+	v = (v | v>>1) & 0x3333333333333333
+	v = (v | v>>2) & 0x0F0F0F0F0F0F0F0F
+	v = (v | v>>4) & 0x00FF00FF00FF00FF
+	v = (v | v>>8) & 0x0000FFFF0000FFFF
+	v = (v | v>>16) & 0x00000000FFFFFFFF
+	return uint32(v)
+}
+
+// locationOfScore returns the location a score stands for.
+//
+// A score doesn't have the precision of the coordinates it was computed
+// from: all the points of a small area, less than a meter across, have the
+// same one. The location that is returned is the center of that area, which
+// is very close to the one that was given, but rarely the very same.
+func locationOfScore(score float64) location {
+	// The scores of locations are whole numbers of 52 bits. A sorted set can
+	// hold members with any score, which are decoded as best as can be.
+	var bits uint64
+	switch {
+	case score >= 1<<64:
+		bits = math.MaxUint64
+	case score > 0:
+		bits = uint64(score)
+	}
+	latitude, longitude := squashBits(bits), squashBits(bits>>1)
+
+	// The area goes from the point the two integers stand for to the point
+	// of the next integers.
+	//
+	// Each bound is a product added to a minimum. Redis computes that in one
+	// step, rounding once, on the processors that can; rounding the product
+	// first sometimes gives a result that differs by its last digit. math.FMA
+	// does it in one step on every processor, which is also what the
+	// reference values of this computation were obtained with.
+	const steps = 1 << geoHashBits
+	latitudeRange, longitudeRange := maxLatitude-minLatitude, maxLongitude-minLongitude
+	south := math.FMA(float64(latitude)/steps, latitudeRange, minLatitude)
+	north := math.FMA(float64(latitude+1)/steps, latitudeRange, minLatitude)
+	west := math.FMA(float64(longitude)/steps, longitudeRange, minLongitude)
+	east := math.FMA(float64(longitude+1)/steps, longitudeRange, minLongitude)
+
+	return location{
+		longitude: min(max((west+east)/2, minLongitude), maxLongitude),
+		latitude:  min(max((south+north)/2, minLatitude), maxLatitude),
+	}
+}
+
 // parseLocation parses the coordinates of a location, given in degrees as
 // decimal numbers. On invalid input it returns the error reply to send
 // instead: coordinates have to be numbers, within the limits above.
@@ -132,4 +183,33 @@ func cmdGeoAdd(c *client, args []string) []byte {
 		s.propagate(append([]string{"GEOADD"}, args...)...)
 	}
 	return integerReply(added)
+}
+
+// cmdGeoPos implements GEOPOS key [member ...]: it replies with the position
+// of each of the members in the set of locations stored at key, in the order
+// they are given, as an array made of its longitude and its latitude, both
+// written as bulk strings. A member that isn't in the set gets a null array
+// instead, which is what every member gets when the key doesn't exist.
+//
+// The coordinates are the ones the score of the member stands for: see
+// locationOfScore for how they compare with the ones the location was added
+// with.
+func cmdGeoPos(c *client, args []string) []byte {
+	z, err := c.server.store.getSortedSet(args[0])
+	if err != nil {
+		return errorReply(err.Error())
+	}
+
+	positions := make([][]byte, len(args)-1)
+	for i, member := range args[1:] {
+		positions[i] = nullArray
+		if z == nil {
+			continue
+		}
+		if score, ok := z.scores[member]; ok {
+			l := locationOfScore(score)
+			positions[i] = bulkStringArray([]string{formatScore(l.longitude), formatScore(l.latitude)})
+		}
+	}
+	return arrayReply(positions...)
 }

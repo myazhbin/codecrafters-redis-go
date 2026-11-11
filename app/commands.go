@@ -85,6 +85,7 @@ var commands = map[string]command{
 	"BITOP":    {arity: -4, handler: cmdBitOp},
 
 	"GEOADD": {arity: -5, handler: cmdGeoAdd},
+	"GEOPOS": {arity: -2, handler: cmdGeoPos},
 
 	"SUBSCRIBE":   {arity: -2, handler: cmdSubscribe, pubsub: true},
 	"UNSUBSCRIBE": {arity: -1, handler: cmdUnsubscribe, pubsub: true},
