@@ -13,17 +13,20 @@ type Server struct {
 	// served by its own goroutine.
 	mu    sync.Mutex
 	store *store
-	// listWaiters holds, for each list key, the clients that are blocked
-	// waiting for an element to be pushed to it. The client that has been
-	// waiting the longest comes first.
-	listWaiters map[string][]*listWaiter
+	// listWaiters holds the clients blocked until an element is pushed to a
+	// list, by list key.
+	listWaiters waitQueues[*listWaiter]
+	// streamWaiters holds the clients blocked until an entry is added to a
+	// stream, by stream key.
+	streamWaiters waitQueues[*streamWaiter]
 }
 
 // NewServer returns a server with an empty keyspace that is ready to Serve.
 func NewServer() *Server {
 	return &Server{
-		store:       newStore(),
-		listWaiters: make(map[string][]*listWaiter),
+		store:         newStore(),
+		listWaiters:   make(waitQueues[*listWaiter]),
+		streamWaiters: make(waitQueues[*streamWaiter]),
 	}
 }
 

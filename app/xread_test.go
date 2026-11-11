@@ -167,6 +167,9 @@ func TestXReadSyntaxErrors(t *testing.T) {
 	expectReply(t, conn, wrongArity)
 	do(t, conn, "XREAD", "STREAMS", "stream_key")
 	expectReply(t, conn, wrongArity)
+	// Enough arguments, but nothing after STREAMS.
+	do(t, conn, "XREAD", "BLOCK", "100", "STREAMS")
+	expectReply(t, conn, "-ERR syntax error\r\n")
 
 	// The STREAMS keyword is mandatory.
 	do(t, conn, "XREAD", "stream_key", "0-0", "extra")

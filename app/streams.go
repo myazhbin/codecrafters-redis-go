@@ -274,6 +274,7 @@ func cmdXAdd(c *client, args []string) []byte {
 	if created {
 		store.setStream(key, st)
 	}
+	c.server.wakeStreamWaiters(key)
 	return bulkString(id.String())
 }
 
@@ -308,51 +309,192 @@ func cmdXRange(c *client, args []string) []byte {
 // stream key.
 var errUnbalancedXRead = errors.New("ERR Unbalanced 'xread' list of streams: for each stream key an ID, '+', or '$' must be specified.")
 
-// cmdXRead implements XREAD STREAMS key [key ...] id [id ...]: for each of
-// the streams, it replies with the entries whose ID is strictly greater than
-// the ID given for that stream.
+// streamWaiter is a client blocked in XREAD, waiting for an entry to be added
+// to one of several streams.
+type streamWaiter struct {
+	// keys are the streams the client waits on, without duplicates.
+	keys []string
+	// wake is signalled when an entry is added to one of the streams. It is
+	// buffered so that signalling never blocks, and so that a signal sent
+	// while the client isn't listening yet is not lost.
+	wake chan struct{}
+}
+
+// addStreamWaiter registers a client as waiting for new entries in any of the
+// streams stored at keys.
+func (s *Server) addStreamWaiter(keys []string) *streamWaiter {
+	w := &streamWaiter{keys: unique(keys), wake: make(chan struct{}, 1)}
+	s.streamWaiters.add(w, w.keys)
+	return w
+}
+
+// removeStreamWaiter makes w stop waiting on all of its keys.
+func (s *Server) removeStreamWaiter(w *streamWaiter) {
+	s.streamWaiters.remove(w, w.keys)
+}
+
+// wakeStreamWaiters signals all the clients blocked on the stream stored at
+// key that it has a new entry. Unlike elements of a list, an entry isn't
+// consumed by the client that reads it: every waiting client gets to see it.
+func (s *Server) wakeStreamWaiters(key string) {
+	for _, w := range s.streamWaiters[key] {
+		select {
+		case w.wake <- struct{}{}:
+		default: // already signalled
+		}
+	}
+}
+
+// xreadArgs are the arguments of an XREAD command.
+type xreadArgs struct {
+	// block tells whether the BLOCK option was given.
+	block bool
+	// timeout is how long BLOCK waits for; 0 means "for as long as it takes".
+	timeout time.Duration
+	// keys are the streams to read, and ids the ID after which to read each
+	// of them.
+	keys []string
+	ids  []string
+}
+
+// parseXReadArgs parses the arguments of
+// XREAD [BLOCK milliseconds] STREAMS key [key ...] id [id ...].
+// On invalid input it returns the error reply to send.
+func parseXReadArgs(args []string) (xreadArgs, []byte) {
+	var parsed xreadArgs
+
+	for i := 0; i < len(args); i++ {
+		// Every option needs at least one argument after it.
+		hasMore := i+1 < len(args)
+
+		switch option := strings.ToUpper(args[i]); {
+		case option == "BLOCK" && hasMore:
+			i++
+			ms, err := strconv.ParseInt(args[i], 10, 64)
+			if err != nil {
+				return parsed, errorReply("ERR timeout is not an integer or out of range")
+			}
+			if ms < 0 {
+				return parsed, errorReply("ERR timeout is negative")
+			}
+			parsed.block = true
+			// Timeouts too long for a time.Duration are as good as forever.
+			parsed.timeout = time.Duration(min(ms, math.MaxInt64/int64(time.Millisecond))) * time.Millisecond
+
+		case option == "STREAMS" && hasMore:
+			// What follows STREAMS is the list of keys, then one ID for each
+			// of them.
+			rest := args[i+1:]
+			if len(rest)%2 != 0 {
+				return parsed, errorReply(errUnbalancedXRead.Error())
+			}
+			parsed.keys, parsed.ids = rest[:len(rest)/2], rest[len(rest)/2:]
+			return parsed, nil
+
+		default:
+			return parsed, errorReply("ERR syntax error")
+		}
+	}
+
+	// The STREAMS option is mandatory.
+	return parsed, errorReply("ERR syntax error")
+}
+
+// cmdXRead implements XREAD [BLOCK milliseconds] STREAMS key [key ...] id
+// [id ...]: for each of the streams, it replies with the entries whose ID is
+// strictly greater than the ID given for that stream.
 //
 // The reply is an array with one element per stream that has such entries,
 // in the order the streams were given. Each element is an array holding the
-// key of the stream and the array of its entries. When no stream has any
-// entry to return, the reply is a null array.
+// key of the stream and the array of its entries.
+//
+// When no stream has any entry to return the reply is a null array, unless
+// BLOCK is given: the client then waits until an entry is added to one of the
+// streams, for at most the given number of milliseconds.
 func cmdXRead(c *client, args []string) []byte {
-	store := c.server.store
+	s := c.server
 
-	if !strings.EqualFold(args[0], "STREAMS") {
-		return errorReply("ERR syntax error")
+	parsed, errReply := parseXReadArgs(args)
+	if errReply != nil {
+		return errReply
 	}
-	// What follows STREAMS is the list of keys, then one ID for each of them.
-	rest := args[1:]
-	if len(rest)%2 != 0 {
-		return errorReply(errUnbalancedXRead.Error())
-	}
-	keys, rawIDs := rest[:len(rest)/2], rest[len(rest)/2:]
 
 	// Every argument is validated before anything is read.
-	streams := make([]*stream, len(keys))
-	ids := make([]streamID, len(keys))
-	for i, key := range keys {
-		var err error
-		if streams[i], err = store.getStream(key); err != nil {
+	ids := make([]streamID, len(parsed.keys))
+	for i, key := range parsed.keys {
+		if _, err := s.store.getStream(key); err != nil {
 			return errorReply(err.Error())
 		}
-		if ids[i], err = parseStreamID(rawIDs[i], 0); err != nil {
+		var err error
+		if ids[i], err = parseStreamID(parsed.ids[i], 0); err != nil {
 			return errorReply(err.Error())
 		}
 	}
 
+	if reply := s.readStreams(parsed.keys, ids); reply != nil || !parsed.block {
+		return orNullArray(reply)
+	}
+
+	// Nothing to read yet: wait for XADD to signal a new entry. A nil channel
+	// is never ready, so without timeout the wait has no deadline.
+	var expired <-chan time.Time
+	if parsed.timeout > 0 {
+		timer := time.NewTimer(parsed.timeout)
+		defer timer.Stop()
+		expired = timer.C
+	}
+
+	w := s.addStreamWaiter(parsed.keys)
+	defer s.removeStreamWaiter(w)
+	for {
+		// The lock is released while waiting, so that other clients get a
+		// chance to add entries.
+		var timedOut, disconnected bool
+		s.mu.Unlock()
+		select {
+		case <-w.wake:
+		case <-expired:
+			timedOut = true
+		case <-c.ctx.Done():
+			disconnected = true
+		}
+		s.mu.Lock()
+
+		if disconnected {
+			return nil
+		}
+		// Reading again after a wake-up can still come back empty-handed: the
+		// new entry may have an ID below the one the client asked for.
+		if reply := s.readStreams(parsed.keys, ids); reply != nil || timedOut {
+			return orNullArray(reply)
+		}
+	}
+}
+
+// readStreams builds the reply of XREAD: for each of the streams stored at
+// keys, the entries that come after the corresponding ID. It returns nil if
+// none of the streams has such entries.
+func (s *Server) readStreams(keys []string, ids []streamID) []byte {
 	var results [][]byte
 	for i, key := range keys {
-		if streams[i] == nil {
+		st, err := s.store.getStream(key)
+		if err != nil || st == nil {
 			continue
 		}
-		if entries := streams[i].after(ids[i]); len(entries) > 0 {
+		if entries := st.after(ids[i]); len(entries) > 0 {
 			results = append(results, arrayReply(bulkString(key), entriesReply(entries)))
 		}
 	}
 	if len(results) == 0 {
-		return nullArray
+		return nil
 	}
 	return arrayReply(results...)
+}
+
+// orNullArray returns reply, or the null array if reply is nil.
+func orNullArray(reply []byte) []byte {
+	if reply == nil {
+		return nullArray
+	}
+	return reply
 }

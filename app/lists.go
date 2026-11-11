@@ -100,32 +100,14 @@ type poppedElement struct {
 // addListWaiter registers a client as waiting for an element on any of the
 // keys, behind the clients that are already waiting on them.
 func (s *Server) addListWaiter(keys []string) *listWaiter {
-	w := &listWaiter{served: make(chan poppedElement, 1)}
-	for _, key := range keys {
-		if !contains(w.keys, key) {
-			w.keys = append(w.keys, key)
-			s.listWaiters[key] = append(s.listWaiters[key], w)
-		}
-	}
+	w := &listWaiter{keys: unique(keys), served: make(chan poppedElement, 1)}
+	s.listWaiters.add(w, w.keys)
 	return w
 }
 
 // removeListWaiter makes w stop waiting on all of its keys.
 func (s *Server) removeListWaiter(w *listWaiter) {
-	for _, key := range w.keys {
-		waiters := s.listWaiters[key]
-		for i, other := range waiters {
-			if other == w {
-				waiters = append(waiters[:i], waiters[i+1:]...)
-				break
-			}
-		}
-		if len(waiters) == 0 {
-			delete(s.listWaiters, key)
-		} else {
-			s.listWaiters[key] = waiters
-		}
-	}
+	s.listWaiters.remove(w, w.keys)
 }
 
 // serveListWaiters hands the elements of the list stored at key over to the
@@ -143,16 +125,6 @@ func (s *Server) serveListWaiters(key string) {
 		s.removeListWaiter(w)
 		w.served <- poppedElement{key: key, element: s.popFromList(key, l)}
 	}
-}
-
-// contains reports whether items includes s.
-func contains(items []string, s string) bool {
-	for _, item := range items {
-		if item == s {
-			return true
-		}
-	}
-	return false
 }
 
 // cmdRPush implements RPUSH key element [element ...]: it appends the
