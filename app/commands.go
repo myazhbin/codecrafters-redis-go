@@ -44,6 +44,7 @@ var commands = map[string]command{
 	"XREAD":  {arity: -4, handler: cmdXRead},
 
 	"MULTI": {arity: 1, handler: cmdMulti},
+	"EXEC":  {arity: 1, handler: cmdExec},
 }
 
 // execute runs a single command sent by the client and returns the reply to
