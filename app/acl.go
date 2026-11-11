@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"slices"
@@ -45,6 +46,24 @@ func (u *user) flags() []string {
 func hashPassword(password string) string {
 	hash := sha256.Sum256([]byte(password))
 	return hex.EncodeToString(hash[:])
+}
+
+// accepts reports whether the password is one the user can be authenticated
+// with: any password is, for a user that has the nopass flag, and the
+// passwords that were added to the user otherwise.
+//
+// The time the comparison takes doesn't depend on how close the password is
+// to a right one, nor on which of the user's passwords it is.
+func (u *user) accepts(password string) bool {
+	if u.nopass {
+		return true
+	}
+	hash := []byte(hashPassword(password))
+	accepted := 0
+	for _, known := range u.passwords {
+		accepted |= subtle.ConstantTimeCompare(hash, []byte(known))
+	}
+	return accepted == 1
 }
 
 // applyRule changes the user according to a rule of ACL SETUSER:
@@ -153,4 +172,35 @@ func cmdACL(c *client, args []string) []byte {
 	default:
 		return errorReply("ERR unknown subcommand '" + args[0] + "'. Try ACL HELP.")
 	}
+}
+
+// cmdAuth implements AUTH [username] password: it authenticates the
+// connection as the user, if the password is one of the user's. Without
+// username, the user is the default one.
+//
+// The reply is OK, or an error that doesn't tell whether it is the user or
+// the password that is wrong. The connection stays as it was after a failed
+// attempt.
+func cmdAuth(c *client, args []string) []byte {
+	if len(args) > 2 {
+		return errorReply("ERR syntax error")
+	}
+	s := c.server
+
+	name, password := defaultUserName, args[0]
+	switch {
+	case len(args) == 2:
+		name, password = args[0], args[1]
+	case s.defaultUser.nopass:
+		// A password alone is the way to authenticate on a server that is
+		// protected by a single password. This one isn't.
+		return errorReply("ERR AUTH <password> called without any password configured for the default user. Are you sure your configuration is correct?")
+	}
+
+	u, ok := s.users[name]
+	if !ok || !u.accepts(password) {
+		return errorReply("WRONGPASS invalid username-password pair or user is disabled.")
+	}
+	c.user = u
+	return simpleString("OK")
 }
