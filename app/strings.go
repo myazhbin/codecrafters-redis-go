@@ -87,6 +87,16 @@ func cmdGet(c *client, args []string) []byte {
 	return bulkString(value)
 }
 
+// cmdStrlen implements STRLEN key: it replies with the length of the string
+// stored at key, in bytes, which is 0 if the key doesn't exist.
+func cmdStrlen(c *client, args []string) []byte {
+	value, _, err := c.server.store.getString(args[0])
+	if err != nil {
+		return errorReply(err.Error())
+	}
+	return integerReply(len(value))
+}
+
 // cmdIncr implements INCR key: it adds one to the integer stored at key and
 // replies with the new value. A key that doesn't exist counts as 0, so its
 // value becomes 1.

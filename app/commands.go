@@ -36,14 +36,15 @@ type command struct {
 
 // commands maps upper-case command names to their implementation.
 var commands = map[string]command{
-	"PING": {arity: -1, handler: cmdPing, pubsub: true},
-	"ECHO": {arity: 2, handler: cmdEcho},
-	"SET":  {arity: -3, handler: cmdSet},
-	"GET":  {arity: 2, handler: cmdGet},
-	"TYPE": {arity: 2, handler: cmdType},
-	"INCR": {arity: 2, handler: cmdIncr},
-	"KEYS": {arity: 2, handler: cmdKeys},
-	"INFO": {arity: -1, handler: cmdInfo},
+	"PING":   {arity: -1, handler: cmdPing, pubsub: true},
+	"ECHO":   {arity: 2, handler: cmdEcho},
+	"SET":    {arity: -3, handler: cmdSet},
+	"GET":    {arity: 2, handler: cmdGet},
+	"TYPE":   {arity: 2, handler: cmdType},
+	"STRLEN": {arity: 2, handler: cmdStrlen},
+	"INCR":   {arity: 2, handler: cmdIncr},
+	"KEYS":   {arity: 2, handler: cmdKeys},
+	"INFO":   {arity: -1, handler: cmdInfo},
 
 	"CONFIG": {arity: -2, handler: cmdConfig, container: true},
 
