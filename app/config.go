@@ -103,6 +103,44 @@ func parseConfig(args []string) (config, error) {
 			} else {
 				cfg.dbFilename = args[i]
 			}
+		case "appendonly":
+			if i+1 >= len(args) {
+				return config{}, fmt.Errorf("option --%s needs a value", name)
+			}
+			i++
+			switch strings.ToLower(args[i]) {
+			case "yes":
+				cfg.appendOnly = true
+			case "no":
+				cfg.appendOnly = false
+			default:
+				return config{}, fmt.Errorf("invalid value %q for option --%s: must be \"yes\" or \"no\"", args[i], name)
+			}
+		case "appenddirname", "appendfilename":
+			if i+1 >= len(args) {
+				return config{}, fmt.Errorf("option --%s needs a value", name)
+			}
+			i++
+			// Both are names inside the data directory, not paths.
+			if args[i] == "" || args[i] == "." || args[i] == ".." || strings.ContainsAny(args[i], `/\`) {
+				return config{}, fmt.Errorf("invalid value %q for option --%s: must be a file name, not a path", args[i], name)
+			}
+			if name == "appenddirname" {
+				cfg.appendDirName = args[i]
+			} else {
+				cfg.appendFilename = args[i]
+			}
+		case "appendfsync":
+			if i+1 >= len(args) {
+				return config{}, fmt.Errorf("option --%s needs a value", name)
+			}
+			i++
+			switch policy := strings.ToLower(args[i]); policy {
+			case "always", "everysec", "no":
+				cfg.appendFsync = policy
+			default:
+				return config{}, fmt.Errorf("invalid value %q for option --%s: must be \"always\", \"everysec\" or \"no\"", args[i], name)
+			}
 		case "replicaof":
 			// The master is given as "host port", either as a single
 			// argument or as two of them.
