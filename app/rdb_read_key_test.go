@@ -17,19 +17,22 @@ type rdbTestKey struct {
 	expiryInSeconds bool
 }
 
+// rdbLength encodes n the way RDB files store lengths and sizes, on 1, 2 or 5
+// bytes depending on how large it is.
+func rdbLength(n int) []byte {
+	switch {
+	case n < 1<<6:
+		return []byte{byte(n)}
+	case n < 1<<14:
+		return []byte{0x40 | byte(n>>8), byte(n)}
+	default:
+		return binary.BigEndian.AppendUint32([]byte{0x80}, uint32(n))
+	}
+}
+
 // rdbString encodes s as an RDB string: its length, then its bytes.
 func rdbString(s string) []byte {
-	var b []byte
-	switch n := len(s); {
-	case n < 1<<6:
-		b = append(b, byte(n))
-	case n < 1<<14:
-		b = append(b, 0x40|byte(n>>8), byte(n))
-	default:
-		b = append(b, 0x80)
-		b = binary.BigEndian.AppendUint32(b, uint32(n))
-	}
-	return append(b, s...)
+	return append(rdbLength(len(s)), s...)
 }
 
 // buildRDB returns the contents of an RDB file that holds the given keys in
@@ -51,7 +54,9 @@ func buildRDB(keys ...rdbTestKey) []byte {
 	file = append(file, rdbString("redis-bits")...)
 	file = append(file, 0xC0, 0x40) // the integer 64
 	// Database 0 and the sizes of its hash tables.
-	file = append(file, 0xFE, 0x00, 0xFB, byte(len(keys)), byte(withExpiry))
+	file = append(file, 0xFE, 0x00, 0xFB)
+	file = append(file, rdbLength(len(keys))...)
+	file = append(file, rdbLength(withExpiry)...)
 	for _, k := range keys {
 		switch {
 		case k.expiresAt.IsZero():
