@@ -25,11 +25,18 @@ type command struct {
 	// inside a transaction, where every other command is queued instead. The
 	// commands that control transactions are.
 	immediate bool
+	// pubsub is set for the commands a client can still send once it is
+	// subscribed to channels: the ones that are about its subscriptions, and
+	// PING. Every other command is refused then.
+	pubsub bool
+	// container is set for the commands whose first argument selects a
+	// subcommand, such as CONFIG GET.
+	container bool
 }
 
 // commands maps upper-case command names to their implementation.
 var commands = map[string]command{
-	"PING": {arity: -1, handler: cmdPing},
+	"PING": {arity: -1, handler: cmdPing, pubsub: true},
 	"ECHO": {arity: 2, handler: cmdEcho},
 	"SET":  {arity: -3, handler: cmdSet},
 	"GET":  {arity: 2, handler: cmdGet},
@@ -38,7 +45,7 @@ var commands = map[string]command{
 	"KEYS": {arity: 2, handler: cmdKeys},
 	"INFO": {arity: -1, handler: cmdInfo},
 
-	"CONFIG": {arity: -2, handler: cmdConfig},
+	"CONFIG": {arity: -2, handler: cmdConfig, container: true},
 
 	"RPUSH":  {arity: -3, handler: cmdRPush},
 	"LPUSH":  {arity: -3, handler: cmdLPush},
@@ -64,7 +71,7 @@ var commands = map[string]command{
 	"WATCH":   {arity: -2, handler: cmdWatch, immediate: true},
 	"UNWATCH": {arity: 1, handler: cmdUnwatch},
 
-	"SUBSCRIBE": {arity: -2, handler: cmdSubscribe},
+	"SUBSCRIBE": {arity: -2, handler: cmdSubscribe, pubsub: true},
 }
 
 // execute runs a single command sent by the client and returns the reply to
@@ -83,6 +90,13 @@ func (c *client) execute(args []string) []byte {
 	c.server.mu.Lock()
 	defer c.server.mu.Unlock()
 
+	// A client that is subscribed to channels uses its connection to receive
+	// what is published to them. The only commands it can still send are the
+	// ones made for that mode.
+	if c.inSubscribedMode() && !cmd.pubsub {
+		return errorReply("ERR Can't execute '" + cmd.fullName(args) + "': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context")
+	}
+
 	// Inside a transaction commands are only recorded: they have no effect,
 	// and nothing is read, before the transaction is executed.
 	if c.inTransaction && !cmd.immediate {
@@ -90,6 +104,17 @@ func (c *client) execute(args []string) []byte {
 		return simpleString("QUEUED")
 	}
 	return cmd.handler(c, args[1:])
+}
+
+// fullName returns the name Redis gives the command in its error messages,
+// given the command as the client sent it: the name in lower case, followed
+// by "|" and the subcommand for the commands that have subcommands.
+func (cmd command) fullName(args []string) string {
+	name := strings.ToLower(args[0])
+	if cmd.container && len(args) > 1 {
+		name += "|" + strings.ToLower(args[1])
+	}
+	return name
 }
 
 // unknownCommandError mirrors the error Redis sends for unknown commands.

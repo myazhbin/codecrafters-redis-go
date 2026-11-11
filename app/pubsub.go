@@ -38,6 +38,13 @@ func (c *client) canSubscribe() bool {
 	return c.conn != nil && !c.isMaster
 }
 
+// inSubscribedMode reports whether the client is in subscribed mode, which it
+// enters by subscribing to a channel and stays in for as long as it is
+// subscribed to at least one.
+func (c *client) inSubscribedMode() bool {
+	return len(c.subscriptions) > 0
+}
+
 // subscribe subscribes the client to channel. It does nothing if the client
 // is subscribed to it already.
 func (c *client) subscribe(channel string) {
