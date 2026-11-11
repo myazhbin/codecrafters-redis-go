@@ -37,6 +37,8 @@ var commands = map[string]command{
 	"INCR": {arity: 2, handler: cmdIncr},
 	"INFO": {arity: -1, handler: cmdInfo},
 
+	"CONFIG": {arity: -2, handler: cmdConfig},
+
 	"RPUSH":  {arity: -3, handler: cmdRPush},
 	"LPUSH":  {arity: -3, handler: cmdLPush},
 	"LRANGE": {arity: 4, handler: cmdLRange},

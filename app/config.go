@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net"
+	"path"
 	"strconv"
 	"strings"
 )
@@ -14,6 +15,10 @@ const defaultPort = 6379
 type config struct {
 	// port is the TCP port the server listens on.
 	port int
+	// dir is the directory the RDB file is stored in.
+	dir string
+	// dbFilename is the name of the RDB file, inside dir.
+	dbFilename string
 	// replicaOf is the master the server replicates, or nil if the server is
 	// a master itself.
 	replicaOf *masterAddress
@@ -33,7 +38,11 @@ func (m masterAddress) String() string {
 // defaultConfig returns the configuration of a server started without any
 // command-line argument.
 func defaultConfig() config {
-	return config{port: defaultPort}
+	return config{
+		port:       defaultPort,
+		dir:        ".",
+		dbFilename: "dump.rdb",
+	}
 }
 
 // parseConfig builds the server's configuration from the command-line
@@ -60,6 +69,19 @@ func parseConfig(args []string) (config, error) {
 				return config{}, err
 			}
 			cfg.port = port
+		case "dir", "dbfilename":
+			if i+1 >= len(args) {
+				return config{}, fmt.Errorf("option --%s needs a value", name)
+			}
+			i++
+			if args[i] == "" {
+				return config{}, fmt.Errorf("option --%s can't be empty", name)
+			}
+			if name == "dir" {
+				cfg.dir = args[i]
+			} else {
+				cfg.dbFilename = args[i]
+			}
 		case "replicaof":
 			// The master is given as "host port", either as a single
 			// argument or as two of them.
@@ -100,4 +122,48 @@ func parsePort(s string) (int, error) {
 // interface, on the configured port.
 func (cfg config) listenAddress() string {
 	return net.JoinHostPort("0.0.0.0", strconv.Itoa(cfg.port))
+}
+
+// configParameters lists the configuration parameters clients can read with
+// CONFIG GET, in the order they are reported, along with how to get their
+// value.
+var configParameters = []struct {
+	name  string
+	value func(cfg config) string
+}{
+	{"dbfilename", func(cfg config) string { return cfg.dbFilename }},
+	{"dir", func(cfg config) string { return cfg.dir }},
+	{"port", func(cfg config) string { return strconv.Itoa(cfg.port) }},
+}
+
+// cmdConfig implements the CONFIG command, whose first argument selects what
+// it does:
+//
+//   - CONFIG GET parameter [parameter ...] replies with the configuration
+//     parameters that are asked for, as an array that alternates names and
+//     values. Parameters can be asked for with glob-style patterns, such as
+//     "db*". Names that match nothing are left out of the reply, and a
+//     parameter that is asked for several times is reported once.
+//
+// Subcommand and parameter names are case-insensitive.
+func cmdConfig(c *client, args []string) []byte {
+	switch strings.ToUpper(args[0]) {
+	case "GET":
+		if len(args) < 2 {
+			return errorReply("ERR wrong number of arguments for 'config|get' command")
+		}
+		var reply []string
+		for _, parameter := range configParameters {
+			for _, pattern := range args[1:] {
+				// A malformed pattern matches nothing.
+				if ok, _ := path.Match(strings.ToLower(pattern), parameter.name); ok {
+					reply = append(reply, parameter.name, parameter.value(c.server.cfg))
+					break
+				}
+			}
+		}
+		return bulkStringArray(reply)
+	default:
+		return errorReply("ERR unknown subcommand '" + args[0] + "'. Try CONFIG HELP.")
+	}
 }
