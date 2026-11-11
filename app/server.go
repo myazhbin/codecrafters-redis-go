@@ -21,6 +21,13 @@ type Server struct {
 	store *store
 	// cfg is the configuration the server was started with.
 	cfg config
+	// replID is the server's replication ID: a random string that identifies
+	// the history of its dataset. A server gets a new one every time it
+	// starts.
+	replID string
+	// replOffset is the replication offset: the number of bytes of commands
+	// the server has sent down the replication stream.
+	replOffset int64
 	// listWaiters holds the clients blocked until an element is pushed to a
 	// list, by list key.
 	listWaiters waitQueues[*listWaiter]
@@ -43,6 +50,7 @@ func NewServer() *Server {
 func NewServerWithConfig(cfg config) *Server {
 	s := &Server{
 		cfg:           cfg,
+		replID:        newReplicationID(),
 		store:         newStore(),
 		listWaiters:   make(waitQueues[*listWaiter]),
 		streamWaiters: make(waitQueues[*streamWaiter]),

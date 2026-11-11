@@ -1,6 +1,9 @@
 package main
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 // This file implements INFO, which reports information about the server.
 
@@ -33,6 +36,8 @@ func (s *Server) replicationInfo() []infoField {
 	}
 	return []infoField{
 		{"role", role},
+		{"master_replid", s.replID},
+		{"master_repl_offset", strconv.FormatInt(s.replOffset, 10)},
 	}
 }
 
