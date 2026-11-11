@@ -172,3 +172,19 @@ func cmdReplconf(c *client, args []string) []byte {
 	c.listeningPort = listeningPort
 	return simpleString("OK")
 }
+
+// cmdPsync implements PSYNC replication-id offset, the last step of the
+// handshake: the replica asks to be brought up to date, saying which history
+// of the dataset it knows (a master's replication ID) and how far into it it
+// got (an offset). A replica that has nothing sends "?" and -1.
+//
+// The master always answers with a full synchronization, whatever the replica
+// already has: "+FULLRESYNC <replication ID> <offset>" tells the replica the
+// master's replication ID and the offset the replica starts from.
+func cmdPsync(c *client, args []string) []byte {
+	if _, ok := parseInt(args[1]); !ok {
+		return errorReply(errNotAnInteger)
+	}
+	s := c.server
+	return simpleString("FULLRESYNC " + s.replID + " " + strconv.FormatInt(s.replOffset, 10))
+}
