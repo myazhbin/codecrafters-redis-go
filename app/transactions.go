@@ -79,6 +79,14 @@ func cmdWatch(c *client, args []string) []byte {
 	return simpleString("OK")
 }
 
+// cmdUnwatch implements UNWATCH: it makes the client stop watching all of the
+// keys it watches, if any. Modifications made to them, before or after, don't
+// abort the client's next transaction anymore.
+func cmdUnwatch(c *client, args []string) []byte {
+	c.unwatch()
+	return simpleString("OK")
+}
+
 // watch makes the client watch key. Watching a key that is already watched
 // changes nothing: modifications seen since the first WATCH still count.
 func (c *client) watch(key string) {
