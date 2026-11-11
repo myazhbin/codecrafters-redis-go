@@ -204,3 +204,17 @@ func cmdZRange(c *client, args []string) []byte {
 	}
 	return bulkStringArray(names)
 }
+
+// cmdZCard implements ZCARD key: it replies with the cardinality of the
+// sorted set stored at key, which is the number of its members. It is 0 if
+// the key doesn't exist.
+func cmdZCard(c *client, args []string) []byte {
+	z, err := c.server.store.getSortedSet(args[0])
+	if err != nil {
+		return errorReply(err.Error())
+	}
+	if z == nil {
+		return integerReply(0)
+	}
+	return integerReply(len(z.ordered))
+}
