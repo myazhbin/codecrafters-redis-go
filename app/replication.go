@@ -48,7 +48,10 @@ func (s *Server) followMaster() error {
 	}
 	defer conn.Close()
 
-	r := bufio.NewReader(conn)
+	// Bytes are counted as they come in, to know how far into the replication
+	// stream the replica is.
+	received := &countingReader{r: conn}
+	r := bufio.NewReader(received)
 	if err := s.handshake(conn, r); err != nil {
 		return fmt.Errorf("handshake with the master at %s: %w", master, err)
 	}
@@ -57,7 +60,7 @@ func (s *Server) followMaster() error {
 		return fmt.Errorf("receiving the snapshot of the master at %s: %w", master, err)
 	}
 
-	if err := s.applyReplicationStream(conn, r); err != nil {
+	if err := s.applyReplicationStream(conn, r, received); err != nil {
 		return fmt.Errorf("reading from the master at %s: %w", master, err)
 	}
 	return nil
@@ -91,20 +94,35 @@ func readRDBTransfer(r *bufio.Reader) ([]byte, error) {
 // exactly like the commands of a client, except that the master isn't sent
 // any reply: it doesn't expect one.
 //
+// The one exception is REPLCONF GETACK, which the master sends to ask how far
+// the replica got: it is answered with REPLCONF ACK and the replica's offset.
+//
+// r reads from received, which counts the bytes that came from the master.
+// The replication stream starts with the next byte r returns.
+//
 // It returns nil when the master closes the connection between two commands,
 // and the error that made reading fail otherwise.
-func (s *Server) applyReplicationStream(conn net.Conn, r *bufio.Reader) error {
+func (s *Server) applyReplicationStream(conn net.Conn, r *bufio.Reader, received *countingReader) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	// The master is a client like any other for the commands it runs, with
 	// its own transaction state.
-	master := &client{server: s, conn: conn, ctx: ctx}
+	master := &client{server: s, conn: conn, ctx: ctx, isMaster: true}
 	defer func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		master.unwatch()
 	}()
+
+	// consumed returns the number of bytes handed out by r so far: what was
+	// received, minus what r read ahead and still holds.
+	consumed := func() int64 { return received.n - int64(r.Buffered()) }
+	start := consumed()
+
+	s.mu.Lock()
+	s.masterOffset = 0
+	s.mu.Unlock()
 
 	for {
 		args, err := readCommand(r)
@@ -114,8 +132,37 @@ func (s *Server) applyReplicationStream(conn net.Conn, r *bufio.Reader) error {
 		if err != nil {
 			return err
 		}
-		master.execute(args)
+
+		reply := master.execute(args)
+		if isGetAck(args) && reply != nil {
+			if _, err := conn.Write(reply); err != nil {
+				return err
+			}
+		}
+
+		// The command only counts as processed once it has been executed:
+		// the offset sent in reply to GETACK doesn't include GETACK itself.
+		s.mu.Lock()
+		s.masterOffset = consumed() - start
+		s.mu.Unlock()
 	}
+}
+
+// isGetAck reports whether the command is REPLCONF GETACK.
+func isGetAck(args []string) bool {
+	return len(args) >= 2 && strings.EqualFold(args[0], "REPLCONF") && strings.EqualFold(args[1], "GETACK")
+}
+
+// countingReader counts the bytes read through it.
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
 }
 
 // handshake is how a replica introduces itself to its master, over the
@@ -208,10 +255,26 @@ func encodeCommandArray(args ...string) []byte {
 //   - "capa <capability>" names a feature of the replication protocol the
 //     replica supports. Capabilities the master doesn't know are ignored.
 //
+// Masters use it too, once the handshake is over: "GETACK *" asks the replica
+// how much of the replication stream it has processed. The replica answers
+// with the command "REPLCONF ACK <offset>" rather than with a regular reply.
+// GETACK only means something coming from the master: from anyone else it is
+// ignored, without a reply.
+//
 // Option names are case-insensitive.
 func cmdReplconf(c *client, args []string) []byte {
 	if len(args)%2 != 0 {
 		return errorReply("ERR syntax error")
+	}
+
+	if strings.EqualFold(args[0], "GETACK") {
+		if c.executing {
+			return errorReply("ERR REPLCONF GETACK is not allowed in a transaction")
+		}
+		if !c.isMaster {
+			return nil
+		}
+		return encodeCommandArray("REPLCONF", "ACK", strconv.FormatInt(c.server.masterOffset, 10))
 	}
 
 	// Nothing is applied before every option is known to be valid.

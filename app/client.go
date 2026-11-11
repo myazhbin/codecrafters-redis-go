@@ -39,6 +39,9 @@ type client struct {
 	// everything sent to it, replies included, goes through the outbox, so
 	// that it all reaches the replica in the order it was produced.
 	outbox *outbox
+	// isMaster is set, on a replica, for the client that stands for the
+	// master: the one whose commands come from the replication stream.
+	isMaster bool
 	// executing is set while EXEC runs the queued commands. Commands that
 	// would otherwise block must not do so then: a transaction runs from
 	// start to finish without letting any other client in.

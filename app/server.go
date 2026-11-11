@@ -34,6 +34,9 @@ type Server struct {
 	// streamWaiters holds the clients blocked until an entry is added to a
 	// stream, by stream key.
 	streamWaiters waitQueues[*streamWaiter]
+	// masterOffset is, on a replica, the number of bytes of the master's
+	// replication stream the replica has processed so far.
+	masterOffset int64
 	// replicas holds the clients that are replicas of this server: the ones
 	// that completed the handshake with PSYNC.
 	replicas map[*client]struct{}
