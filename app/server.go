@@ -78,6 +78,8 @@ type Server struct {
 	// subscribers holds the clients subscribed to a channel with SUBSCRIBE,
 	// by channel. Channels nobody is subscribed to have no entry.
 	subscribers map[string]map[*client]struct{}
+	// users holds the users of the server, by name.
+	users map[string]*user
 	// defaultUser is the user clients are authenticated as when they
 	// connect. It is the same one for as long as the server runs.
 	defaultUser *user
@@ -106,6 +108,7 @@ func NewServerWithConfig(cfg config) *Server {
 		defaultUser:     &user{name: defaultUserName},
 	}
 	s.store.onModify = s.keyModified
+	s.users = map[string]*user{s.defaultUser.name: s.defaultUser}
 	return s
 }
 
