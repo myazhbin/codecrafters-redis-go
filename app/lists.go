@@ -17,8 +17,9 @@ func cmdRPush(s *Server, args []string) []byte {
 }
 
 // cmdLRange implements LRANGE key start stop: it replies with the elements of
-// the list stored at key from index start to index stop, both included. A
-// list that doesn't exist is treated as an empty one.
+// the list stored at key from index start to index stop, both included.
+// Negative indexes count from the end of the list. A list that doesn't exist
+// is treated as an empty one.
 func cmdLRange(s *Server, args []string) []byte {
 	start, startErr := strconv.Atoi(args[1])
 	stop, stopErr := strconv.Atoi(args[2])

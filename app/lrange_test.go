@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math"
 	"reflect"
 	"strconv"
 	"testing"
@@ -40,6 +41,89 @@ func TestLRange(t *testing.T) {
 			expectReply(t, conn, bulkArray(tt.want...))
 		})
 	}
+}
+
+func TestLRangeNegativeIndexes(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+	do(t, conn, "RPUSH", "list_key", "a", "b", "c", "d", "e")
+	expectReply(t, conn, ":5\r\n")
+
+	all := []string{"a", "b", "c", "d", "e"}
+	tests := []struct {
+		name        string
+		start, stop string
+		want        []string
+	}{
+		{"last two elements", "-2", "-1", []string{"d", "e"}},
+		{"all but the last two", "0", "-3", []string{"a", "b", "c"}},
+		{"from an index to the end", "2", "-1", []string{"c", "d", "e"}},
+		{"whole list", "0", "-1", all},
+		{"whole list, both negative", "-5", "-1", all},
+		{"last element only", "-1", "-1", []string{"e"}},
+		{"first element only", "-5", "-5", []string{"a"}},
+		{"middle, both negative", "-4", "-2", []string{"b", "c", "d"}},
+		{"negative start, positive stop", "-3", "3", []string{"c", "d"}},
+		{"negative start, stop past the end", "-2", "10", []string{"d", "e"}},
+		{"positive start, negative stop", "3", "-1", []string{"d", "e"}},
+		{"start just out of range is the start of the list", "-6", "-1", all},
+		{"start far out of range is the start of the list", "-100", "2", []string{"a", "b", "c"}},
+		{"smallest possible start", "-9223372036854775808", "-1", all},
+		{"both out of range on the left", "-100", "-50", nil},
+		{"stop out of range on the left", "0", "-6", nil},
+		{"start after stop, both negative", "-1", "-2", nil},
+		{"start after stop, far apart", "-2", "-5", nil},
+		{"negative start resolving after a positive stop", "-1", "0", nil},
+		{"positive start past the end with negative stop", "5", "-1", nil},
+		{"positive start resolving after a negative stop", "4", "-3", nil},
+		{"minus zero is zero", "-0", "-0", []string{"a"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			do(t, conn, "LRANGE", "list_key", tt.start, tt.stop)
+			expectReply(t, conn, bulkArray(tt.want...))
+		})
+	}
+}
+
+func TestLRangeNegativeIndexesOnSingleElementList(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+	do(t, conn, "RPUSH", "list_key", "only")
+	expectReply(t, conn, ":1\r\n")
+
+	for _, indexes := range [][2]string{{"-1", "-1"}, {"0", "-1"}, {"-1", "0"}, {"-5", "-1"}, {"-5", "5"}} {
+		do(t, conn, "LRANGE", "list_key", indexes[0], indexes[1])
+		expectReply(t, conn, bulkArray("only"))
+	}
+
+	do(t, conn, "LRANGE", "list_key", "-1", "-2")
+	expectReply(t, conn, emptyArray)
+}
+
+func TestLRangeNegativeIndexesFollowTheEndOfTheList(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	do(t, conn, "RPUSH", "list_key", "a", "b")
+	expectReply(t, conn, ":2\r\n")
+	do(t, conn, "LRANGE", "list_key", "-2", "-1")
+	expectReply(t, conn, bulkArray("a", "b"))
+
+	// After an append, -1 designates the new last element.
+	do(t, conn, "RPUSH", "list_key", "c", "d")
+	expectReply(t, conn, ":4\r\n")
+	do(t, conn, "LRANGE", "list_key", "-2", "-1")
+	expectReply(t, conn, bulkArray("c", "d"))
+	do(t, conn, "LRANGE", "list_key", "0", "-1")
+	expectReply(t, conn, bulkArray("a", "b", "c", "d"))
+}
+
+func TestLRangeNegativeIndexesOnMissingList(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	do(t, conn, "LRANGE", "missing", "0", "-1")
+	expectReply(t, conn, emptyArray)
+	do(t, conn, "LRANGE", "missing", "-2", "-1")
+	expectReply(t, conn, emptyArray)
 }
 
 func TestLRangeMissingList(t *testing.T) {
@@ -187,6 +271,18 @@ func TestListSlice(t *testing.T) {
 		{5, 99, nil},
 		{3, 2, nil},
 		{99, 100, nil},
+		{-2, -1, []string{"d", "e"}},
+		{0, -3, []string{"a", "b", "c"}},
+		{2, -1, []string{"c", "d", "e"}},
+		{-5, -1, []string{"a", "b", "c", "d", "e"}},
+		{-6, -1, []string{"a", "b", "c", "d", "e"}},
+		{-100, 1, []string{"a", "b"}},
+		{math.MinInt, math.MaxInt, []string{"a", "b", "c", "d", "e"}},
+		{math.MinInt, math.MinInt, nil},
+		{math.MaxInt, math.MaxInt, nil},
+		{0, -6, nil},
+		{-1, -2, nil},
+		{-1, 0, nil},
 	}
 
 	for _, tt := range tests {
@@ -201,5 +297,48 @@ func TestListSlice(t *testing.T) {
 
 	if got := (&list{}).slice(0, 10); len(got) != 0 {
 		t.Errorf("slice of an empty list = %q, want nothing", got)
+	}
+}
+
+// TestListSliceMatchesModel compares list.slice with a deliberately naive
+// implementation of LRANGE's rules, for every combination of small indexes.
+func TestListSliceMatchesModel(t *testing.T) {
+	// model resolves each index to a position, then collects the elements one
+	// by one.
+	model := func(items []string, start, stop int) []string {
+		n := len(items)
+		if start < 0 {
+			start += n
+		}
+		if stop < 0 {
+			stop += n
+		}
+		var out []string
+		for i := range items {
+			if i >= start && i <= stop {
+				out = append(out, items[i])
+			}
+		}
+		return out
+	}
+
+	for size := 0; size <= 5; size++ {
+		items := make([]string, size)
+		for i := range items {
+			items[i] = strconv.Itoa(i)
+		}
+		l := &list{items: items}
+
+		for start := -8; start <= 8; start++ {
+			for stop := -8; stop <= 8; stop++ {
+				got, want := l.slice(start, stop), model(items, start, stop)
+				if len(got) == 0 && len(want) == 0 {
+					continue
+				}
+				if !reflect.DeepEqual(got, want) {
+					t.Errorf("size %d: slice(%d, %d) = %q, want %q", size, start, stop, got, want)
+				}
+			}
+		}
 	}
 }

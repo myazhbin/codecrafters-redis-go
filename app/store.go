@@ -19,17 +19,24 @@ type list struct {
 }
 
 // slice returns the elements of the list from index start to index stop,
-// both included. Indexes start at 0. A stop index past the end of the list
-// means "up to the last element", and a range that covers no element (such as
-// one starting after the end of the list, or after its own stop) is empty.
+// both included.
+//
+// Indexes start at 0. Negative indexes count from the end of the list: -1 is
+// the last element, -2 the one before, and so on. Indexes that fall outside
+// of the list are brought back to its closest end, and a range that covers no
+// element (such as one starting after its own stop) is empty.
 //
 // The result shares its memory with the list and must not be modified.
 func (l *list) slice(start, stop int) []string {
+	n := len(l.items)
 	if start < 0 {
-		start = 0
+		start = max(start+n, 0)
 	}
-	if stop >= len(l.items) {
-		stop = len(l.items) - 1
+	if stop < 0 {
+		stop += n
+	}
+	if stop >= n {
+		stop = n - 1
 	}
 	if start > stop {
 		return nil
