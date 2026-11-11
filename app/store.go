@@ -1,13 +1,28 @@
 package main
 
-import "time"
+import (
+	"errors"
+	"time"
+)
 
 // noExpiry is the expiry time of keys that never expire.
 var noExpiry time.Time
 
+// errWrongType is returned when a command is run against a key holding a
+// value of another type than the one the command works with, such as GET on
+// a list. Its message is the error clients receive.
+var errWrongType = errors.New("WRONGTYPE Operation against a key holding the wrong kind of value")
+
+// list is the value of a list key: an ordered sequence of strings.
+type list struct {
+	items []string
+}
+
 // entry is what the keyspace stores for a key.
 type entry struct {
-	value string
+	// value is the key's value. Its dynamic type is the type of the key:
+	// string for strings and *list for lists.
+	value any
 	// expiresAt is the instant from which the key no longer exists. The zero
 	// time means the key never expires.
 	expiresAt time.Time
@@ -40,21 +55,69 @@ func newStore() *store {
 	}
 }
 
-// get returns the string stored at key, and whether the key exists.
-func (st *store) get(key string) (string, bool) {
+// lookup returns the entry stored at key, and whether the key exists. Keys
+// that are past their expiry time don't exist anymore.
+func (st *store) lookup(key string) (entry, bool) {
 	e, ok := st.entries[key]
 	if !ok {
-		return "", false
+		return entry{}, false
 	}
 	if e.expired(st.now()) {
 		delete(st.entries, key)
-		return "", false
+		return entry{}, false
 	}
-	return e.value, true
+	return e, true
 }
 
-// set stores value at key, replacing any previous value and expiry. The key
-// stops existing at expiresAt; pass noExpiry for a key that never expires.
-func (st *store) set(key, value string, expiresAt time.Time) {
+// getString returns the string stored at key, and whether the key exists. It
+// fails with errWrongType if the key holds something else than a string.
+func (st *store) getString(key string) (string, bool, error) {
+	e, ok := st.lookup(key)
+	if !ok {
+		return "", false, nil
+	}
+	value, ok := e.value.(string)
+	if !ok {
+		return "", false, errWrongType
+	}
+	return value, true, nil
+}
+
+// setString stores a string at key, replacing any previous value (whatever
+// its type) and expiry. The key stops existing at expiresAt; pass noExpiry
+// for a key that never expires.
+func (st *store) setString(key, value string, expiresAt time.Time) {
 	st.entries[key] = entry{value: value, expiresAt: expiresAt}
+}
+
+// getList returns the list stored at key, or nil if the key doesn't exist. It
+// fails with errWrongType if the key holds something else than a list.
+func (st *store) getList(key string) (*list, error) {
+	e, ok := st.lookup(key)
+	if !ok {
+		return nil, nil
+	}
+	l, ok := e.value.(*list)
+	if !ok {
+		return nil, errWrongType
+	}
+	return l, nil
+}
+
+// getOrCreateList returns the list stored at key, creating it if the key
+// doesn't exist. It fails with errWrongType if the key holds something else
+// than a list.
+//
+// Callers must add at least one element to a list they created: empty lists
+// are not allowed to stay in the keyspace.
+func (st *store) getOrCreateList(key string) (*list, error) {
+	l, err := st.getList(key)
+	if err != nil {
+		return nil, err
+	}
+	if l == nil {
+		l = &list{}
+		st.entries[key] = entry{value: l}
+	}
+	return l, nil
 }

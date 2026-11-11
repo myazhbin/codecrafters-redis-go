@@ -15,6 +15,11 @@ func errorReply(msg string) []byte {
 	return []byte("-" + msg + "\r\n")
 }
 
+// integerReply encodes a signed integer, such as ":42".
+func integerReply(n int) []byte {
+	return []byte(":" + strconv.Itoa(n) + "\r\n")
+}
+
 // bulkString encodes a binary-safe string, prefixed by its length in bytes.
 func bulkString(s string) []byte {
 	b := make([]byte, 0, len(s)+16)

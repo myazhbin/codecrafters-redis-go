@@ -263,15 +263,15 @@ func TestStoreExpiry(t *testing.T) {
 	st := newStore()
 	st.now = clock.Now
 
-	st.set("temp", "value", clock.Now().Add(100*time.Millisecond))
-	st.set("keep", "value", noExpiry)
+	st.setString("temp", "value", clock.Now().Add(100*time.Millisecond))
+	st.setString("keep", "value", noExpiry)
 
-	if _, ok := st.get("temp"); !ok {
+	if _, ok := st.lookup("temp"); !ok {
 		t.Fatalf("key is missing before its expiry time")
 	}
 
 	clock.Advance(100 * time.Millisecond)
-	if value, ok := st.get("temp"); ok {
+	if value, ok, _ := st.getString("temp"); ok {
 		t.Fatalf("expired key is still readable: %q", value)
 	}
 	// Reading an expired key also frees it.
@@ -280,7 +280,7 @@ func TestStoreExpiry(t *testing.T) {
 	}
 
 	clock.Advance(24 * time.Hour)
-	if _, ok := st.get("keep"); !ok {
+	if _, ok := st.lookup("keep"); !ok {
 		t.Fatalf("key without expiry disappeared")
 	}
 }

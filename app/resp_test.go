@@ -128,6 +128,9 @@ func TestReplyEncoding(t *testing.T) {
 	}{
 		{"simple string", simpleString("PONG"), "+PONG\r\n"},
 		{"error", errorReply("ERR something went wrong"), "-ERR something went wrong\r\n"},
+		{"integer", integerReply(42), ":42\r\n"},
+		{"zero", integerReply(0), ":0\r\n"},
+		{"negative integer", integerReply(-7), ":-7\r\n"},
 		{"bulk string", bulkString("hey"), "$3\r\nhey\r\n"},
 		{"empty bulk string", bulkString(""), "$0\r\n\r\n"},
 		{"bulk string length is in bytes", bulkString("héllo"), "$6\r\nhéllo\r\n"},

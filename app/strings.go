@@ -40,7 +40,7 @@ func cmdSet(s *Server, args []string) []byte {
 		}
 	}
 
-	s.store.set(key, value, expiresAt)
+	s.store.setString(key, value, expiresAt)
 	return simpleString("OK")
 }
 
@@ -72,10 +72,13 @@ func parseExpiry(unit, ttl string, now time.Time) (time.Time, []byte) {
 	return time.UnixMilli(nowMs + n), nil
 }
 
-// cmdGet implements GET key: it replies with the value stored at key, or a
+// cmdGet implements GET key: it replies with the string stored at key, or a
 // null bulk string if the key doesn't exist.
 func cmdGet(s *Server, args []string) []byte {
-	value, ok := s.store.get(args[0])
+	value, ok, err := s.store.getString(args[0])
+	if err != nil {
+		return errorReply(err.Error())
+	}
 	if !ok {
 		return nullBulkString
 	}

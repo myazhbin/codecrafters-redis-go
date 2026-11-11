@@ -221,21 +221,21 @@ func TestConcurrentSetAndGet(t *testing.T) {
 	}
 }
 
-func TestStore(t *testing.T) {
+func TestStoreStrings(t *testing.T) {
 	st := newStore()
 
-	if value, ok := st.get("missing"); ok || value != "" {
-		t.Fatalf(`get("missing") = (%q, %v), want ("", false)`, value, ok)
+	if value, ok, err := st.getString("missing"); ok || value != "" || err != nil {
+		t.Fatalf(`getString("missing") = (%q, %v, %v), want ("", false, nil)`, value, ok, err)
 	}
 
-	st.set("key", "value", noExpiry)
-	if value, ok := st.get("key"); !ok || value != "value" {
-		t.Fatalf(`get("key") = (%q, %v), want ("value", true)`, value, ok)
+	st.setString("key", "value", noExpiry)
+	if value, ok, err := st.getString("key"); !ok || value != "value" || err != nil {
+		t.Fatalf(`getString("key") = (%q, %v, %v), want ("value", true, nil)`, value, ok, err)
 	}
 
 	// An empty value is still a value: the key exists.
-	st.set("key", "", noExpiry)
-	if value, ok := st.get("key"); !ok || value != "" {
-		t.Fatalf(`get("key") after overwrite = (%q, %v), want ("", true)`, value, ok)
+	st.setString("key", "", noExpiry)
+	if value, ok, err := st.getString("key"); !ok || value != "" || err != nil {
+		t.Fatalf(`getString("key") after overwrite = (%q, %v, %v), want ("", true, nil)`, value, ok, err)
 	}
 }
