@@ -361,10 +361,11 @@ func (s *Server) removeReplica(c *client) {
 	}
 }
 
-// propagate hands a command that modified the dataset over to the replicas,
-// which keep their copy of the dataset up to date by executing the same
-// commands as the master, in the same order. The command is given as it must
-// be executed by the replicas, name first.
+// propagate records a command that modified the dataset, for those that
+// rebuild the dataset by executing the same commands in the same order: the
+// replicas, which are sent the command, and the server itself when it
+// restarts, which finds it in the append-only file. The command is given as
+// it must be executed then, name first.
 //
 // It must be called by every command that changes the dataset, once the
 // change is made and with the server's lock still held: that's what keeps
@@ -374,7 +375,14 @@ func (s *Server) propagate(command ...string) {
 		s.batch = append(s.batch, command)
 		return
 	}
-	s.feedReplicas(encodeCommandArray(command...))
+	s.recordWrite(encodeCommandArray(command...))
+}
+
+// recordWrite logs encoded commands that modified the dataset to the
+// append-only file and sends them to the replicas.
+func (s *Server) recordWrite(data []byte) {
+	s.appendToAOF(data)
+	s.feedReplicas(data)
 	s.writeOffset = s.replOffset
 }
 
@@ -384,9 +392,9 @@ func (s *Server) beginPropagationBatch() {
 	s.batching = true
 }
 
-// endPropagationBatch sends the replicas the commands that were held back
-// since beginPropagationBatch, wrapped in MULTI and EXEC so that the replicas
-// execute them as a single transaction. Nothing is sent if no command was
+// endPropagationBatch records the commands that were held back since
+// beginPropagationBatch, wrapped in MULTI and EXEC so that they are executed
+// as a single transaction again. Nothing is recorded if no command was
 // propagated in the meantime.
 func (s *Server) endPropagationBatch() {
 	batch := s.batch
@@ -400,8 +408,7 @@ func (s *Server) endPropagationBatch() {
 		stream = append(stream, encodeCommandArray(command...)...)
 	}
 	stream = append(stream, encodeCommandArray("EXEC")...)
-	s.feedReplicas(stream)
-	s.writeOffset = s.replOffset
+	s.recordWrite(stream)
 }
 
 // feedReplicas appends data to the replication stream: it is sent to every

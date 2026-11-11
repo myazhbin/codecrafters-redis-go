@@ -38,6 +38,9 @@ type Server struct {
 	// aof is the append-only file the commands that modify the dataset are
 	// logged to, or nil if AOF persistence is disabled.
 	aof *os.File
+	// aofSyncs counts the times the append-only file was flushed to the
+	// disk.
+	aofSyncs int
 	// masterOffset is, on a replica, the number of bytes of the master's
 	// replication stream the replica has processed so far.
 	masterOffset int64

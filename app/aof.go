@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // This file implements AOF persistence: logging the commands that modify the
@@ -48,10 +49,11 @@ func (cfg config) manifestContents() string {
 //
 //   - it makes sure the directory of the append-only files exists, creating
 //     it (and the data directory above it) if needed;
-//   - it opens the incremental append-only file, creating it empty if it
-//     doesn't exist. A file that is already there is left as it is;
-//   - it writes the manifest that lists that file, unless there is one
-//     already.
+//   - it reads the manifest to find which file is the incremental
+//     append-only file. Without a manifest, the file has its default name and
+//     a manifest that lists it is written;
+//   - it opens that file, creating it empty if it doesn't exist. A file that
+//     is already there is left as it is: commands are added at its end.
 //
 // It does nothing when AOF persistence is disabled.
 func (s *Server) setupAOF() error {
@@ -62,20 +64,110 @@ func (s *Server) setupAOF() error {
 		return fmt.Errorf("creating the append-only directory: %w", err)
 	}
 
-	file, err := os.OpenFile(s.cfg.incrAOFPath(), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
-	if err != nil {
-		return fmt.Errorf("opening the append-only file: %w", err)
+	name := s.cfg.incrAOFName()
+	manifest, err := os.ReadFile(s.cfg.manifestPath())
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		if err := createFileIfMissing(s.cfg.manifestPath(), s.cfg.manifestContents()); err != nil {
+			return fmt.Errorf("creating the manifest of the append-only files: %w", err)
+		}
+	case err != nil:
+		return fmt.Errorf("reading the manifest of the append-only files: %w", err)
+	default:
+		listed, found, err := incrFileOfManifest(string(manifest))
+		if err != nil {
+			return fmt.Errorf("reading the manifest of the append-only files: %w", err)
+		}
+		if found {
+			name = listed
+		}
 	}
 
-	if err := createFileIfMissing(s.cfg.manifestPath(), s.cfg.manifestContents()); err != nil {
-		file.Close()
-		return fmt.Errorf("creating the manifest of the append-only files: %w", err)
+	file, err := os.OpenFile(filepath.Join(s.cfg.appendDir(), name), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
+	if err != nil {
+		return fmt.Errorf("opening the append-only file: %w", err)
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.aof = file
 	return nil
+}
+
+// incrFileOfManifest returns the name of the incremental append-only file
+// listed in a manifest, and whether there is one. If the manifest lists
+// several, the last one is the file in use.
+//
+// A manifest has one line per file, made of space-separated pairs of a field
+// name and its value, such as "file appendonly.aof.1.incr.aof seq 1 type i".
+// Incremental files are the ones whose type is "i".
+func incrFileOfManifest(manifest string) (name string, found bool, err error) {
+	for _, line := range strings.Split(manifest, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 || strings.HasPrefix(fields[0], "#") {
+			continue
+		}
+		if len(fields)%2 != 0 {
+			return "", false, fmt.Errorf("invalid manifest line %q", line)
+		}
+
+		var file, kind string
+		for i := 0; i < len(fields); i += 2 {
+			switch fields[i] {
+			case "file":
+				file = fields[i+1]
+			case "type":
+				kind = fields[i+1]
+			}
+		}
+		if kind != "i" {
+			continue
+		}
+		// The files of the manifest are in the append-only directory: a name
+		// can't lead anywhere else.
+		if file == "" || file != filepath.Base(file) || file == "." || file == ".." {
+			return "", false, fmt.Errorf("invalid file name in manifest line %q", line)
+		}
+		name, found = file, true
+	}
+	return name, found, nil
+}
+
+// appendToAOF logs commands that modified the dataset, already encoded the
+// way clients send them, at the end of the append-only file. It does nothing
+// when AOF persistence is disabled.
+//
+// With the "always" policy the file is flushed to the disk before the call
+// returns, and so before the client that sent the command gets its reply: a
+// write that was acknowledged can't be lost.
+func (s *Server) appendToAOF(data []byte) {
+	if s.aof == nil {
+		return
+	}
+	if _, err := s.aof.Write(data); err != nil {
+		fmt.Fprintln(os.Stderr, "Failed to write to the append-only file:", err)
+		return
+	}
+	if s.cfg.appendFsync == "always" {
+		if err := s.aof.Sync(); err != nil {
+			fmt.Fprintln(os.Stderr, "Failed to flush the append-only file:", err)
+			return
+		}
+		s.aofSyncs++
+	}
+}
+
+// closeAOF closes the append-only file, if it is open.
+func (s *Server) closeAOF() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.aof == nil {
+		return nil
+	}
+	err := s.aof.Close()
+	s.aof = nil
+	return err
 }
 
 // createFileIfMissing creates the file at path with the given contents. A
@@ -93,17 +185,4 @@ func createFileIfMissing(path, contents string) error {
 		return err
 	}
 	return file.Close()
-}
-
-// closeAOF closes the append-only file, if it is open.
-func (s *Server) closeAOF() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.aof == nil {
-		return nil
-	}
-	err := s.aof.Close()
-	s.aof = nil
-	return err
 }
