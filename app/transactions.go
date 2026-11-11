@@ -37,3 +37,16 @@ func cmdExec(c *client, args []string) []byte {
 	}
 	return arrayReply(replies...)
 }
+
+// cmdDiscard implements DISCARD: it aborts the transaction started by MULTI,
+// dropping the queued commands without executing any of them. The connection
+// is back to normal afterwards. It is an error to call it outside of a
+// transaction.
+func cmdDiscard(c *client, args []string) []byte {
+	if !c.inTransaction {
+		return errorReply("ERR DISCARD without MULTI")
+	}
+	c.inTransaction = false
+	c.queued = nil
+	return simpleString("OK")
+}
