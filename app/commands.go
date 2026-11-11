@@ -71,8 +71,9 @@ var commands = map[string]command{
 	"WATCH":   {arity: -2, handler: cmdWatch, immediate: true},
 	"UNWATCH": {arity: 1, handler: cmdUnwatch},
 
-	"ZADD":  {arity: -4, handler: cmdZAdd},
-	"ZRANK": {arity: 3, handler: cmdZRank},
+	"ZADD":   {arity: -4, handler: cmdZAdd},
+	"ZRANK":  {arity: 3, handler: cmdZRank},
+	"ZRANGE": {arity: -4, handler: cmdZRange},
 
 	"SUBSCRIBE":   {arity: -2, handler: cmdSubscribe, pubsub: true},
 	"UNSUBSCRIBE": {arity: -1, handler: cmdUnsubscribe, pubsub: true},
@@ -183,6 +184,31 @@ func parseIndex(s string) (int, bool) {
 		return 0, false
 	}
 	return int(n), true
+}
+
+// indexRange resolves the range that goes from index start to index stop,
+// both included, of a sequence of n elements: it returns the positions the
+// range covers as the half-open interval [from, to).
+//
+// Indexes start at 0. Negative indexes count from the end of the sequence: -1
+// is the last element, -2 the one before, and so on. Indexes that fall
+// outside of the sequence are brought back to its closest end, and a range
+// that covers no element (such as one starting after its own stop) is empty:
+// from and to are then equal.
+func indexRange(n, start, stop int) (from, to int) {
+	if start < 0 {
+		start = max(start+n, 0)
+	}
+	if stop < 0 {
+		stop += n
+	}
+	if stop >= n {
+		stop = n - 1
+	}
+	if start > stop {
+		return 0, 0
+	}
+	return start, stop + 1
 }
 
 // cmdPing implements PING [message]: it replies PONG, or echoes the message.

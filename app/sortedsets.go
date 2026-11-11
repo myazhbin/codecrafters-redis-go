@@ -85,6 +85,15 @@ func (z *sortedSet) rank(member string) (int, bool) {
 	return z.position(scoredMember{member, score}), true
 }
 
+// byRank returns the members whose rank goes from start to stop, both
+// included, in order. See indexRange for what the two can be.
+//
+// The result shares its memory with the set and must not be modified.
+func (z *sortedSet) byRank(start, stop int) []scoredMember {
+	from, to := indexRange(len(z.ordered), start, stop)
+	return z.ordered[from:to]
+}
+
 // parseScore parses the score of a member of a sorted set: a 64-bit
 // floating-point number. It can be infinite ("inf", "+inf", "-inf"), but it
 // has to be a number.
@@ -165,4 +174,33 @@ func cmdZRank(c *client, args []string) []byte {
 		return nullBulkString
 	}
 	return integerReply(rank)
+}
+
+// cmdZRange implements ZRANGE key start stop: it replies with the members of
+// the sorted set stored at key whose rank goes from start to stop, both
+// included, ordered by increasing score. Negative ranks count from the end
+// of the set. A set that doesn't exist is treated as an empty one.
+func cmdZRange(c *client, args []string) []byte {
+	if len(args) > 3 {
+		return errorReply("ERR syntax error")
+	}
+	start, startOK := parseIndex(args[1])
+	stop, stopOK := parseIndex(args[2])
+	if !startOK || !stopOK {
+		return errorReply(errNotAnInteger)
+	}
+
+	z, err := c.server.store.getSortedSet(args[0])
+	if err != nil {
+		return errorReply(err.Error())
+	}
+	if z == nil {
+		return bulkStringArray(nil)
+	}
+	members := z.byRank(start, stop)
+	names := make([]string, len(members))
+	for i, m := range members {
+		names[i] = m.member
+	}
+	return bulkStringArray(names)
 }

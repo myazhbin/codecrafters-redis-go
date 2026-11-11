@@ -47,29 +47,12 @@ func (l *list) popFront(count int) []string {
 }
 
 // slice returns the elements of the list from index start to index stop,
-// both included.
-//
-// Indexes start at 0. Negative indexes count from the end of the list: -1 is
-// the last element, -2 the one before, and so on. Indexes that fall outside
-// of the list are brought back to its closest end, and a range that covers no
-// element (such as one starting after its own stop) is empty.
+// both included. See indexRange for what the indexes can be.
 //
 // The result shares its memory with the list and must not be modified.
 func (l *list) slice(start, stop int) []string {
-	n := len(l.items)
-	if start < 0 {
-		start = max(start+n, 0)
-	}
-	if stop < 0 {
-		stop += n
-	}
-	if stop >= n {
-		stop = n - 1
-	}
-	if start > stop {
-		return nil
-	}
-	return l.items[start : stop+1]
+	from, to := indexRange(len(l.items), start, stop)
+	return l.items[from:to]
 }
 
 // popFromList removes and returns the first element of the list l stored at
