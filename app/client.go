@@ -18,6 +18,11 @@ type client struct {
 	// ctx is cancelled as soon as the client is known to have disconnected.
 	// Commands that block must stop waiting when that happens.
 	ctx context.Context
+
+	// inTransaction is set between MULTI and the end of the transaction it
+	// started. Like the rest of the client's state, it belongs to this
+	// connection only: other clients have their own.
+	inTransaction bool
 }
 
 // request is something read from the client's connection: either a command,
