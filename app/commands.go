@@ -79,6 +79,7 @@ var commands = map[string]command{
 	"ZREM":   {arity: -3, handler: cmdZRem},
 
 	"SETBIT": {arity: 4, handler: cmdSetBit},
+	"GETBIT": {arity: 3, handler: cmdGetBit},
 
 	"SUBSCRIBE":   {arity: -2, handler: cmdSubscribe, pubsub: true},
 	"UNSUBSCRIBE": {arity: -1, handler: cmdUnsubscribe, pubsub: true},

@@ -28,6 +28,16 @@ func bitPosition(offset int64) (index int, mask byte) {
 	return int(offset / 8), 0x80 >> (offset % 8)
 }
 
+// getBit returns the bit at offset in value. A string has no bit beyond its
+// last byte: those bits are 0.
+func getBit(value string, offset int64) byte {
+	index, mask := bitPosition(offset)
+	if index < len(value) && value[index]&mask != 0 {
+		return 1
+	}
+	return 0
+}
+
 // zeros is a block of zero bytes, to pad strings with.
 var zeros [4096]byte
 
@@ -115,4 +125,20 @@ func cmdSetBit(c *client, args []string) []byte {
 		s.propagate(append([]string{"SETBIT"}, args...)...)
 	}
 	return integerReply(int(old))
+}
+
+// cmdGetBit implements GETBIT key offset: it replies with the bit at offset
+// in the string stored at key. The bits that the string is too short to have
+// are 0, and so are all the bits of a key that doesn't exist.
+func cmdGetBit(c *client, args []string) []byte {
+	offset, ok := parseBitOffset(args[1])
+	if !ok {
+		return errorReply("ERR bit offset is not an integer or out of range")
+	}
+
+	value, _, err := c.server.store.getString(args[0])
+	if err != nil {
+		return errorReply(err.Error())
+	}
+	return integerReply(int(getBit(value, offset)))
 }
