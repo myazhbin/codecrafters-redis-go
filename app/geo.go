@@ -3,6 +3,7 @@ package main
 import (
 	"math"
 	"strconv"
+	"strings"
 )
 
 // This file implements the geospatial commands, which deal with locations on
@@ -111,6 +112,56 @@ func locationOfScore(score float64) location {
 	}
 }
 
+// earthRadius is the radius of the Earth, in meters, as Redis has it. The
+// Earth is taken to be a perfect sphere.
+const earthRadius = 6372797.560856
+
+// radians converts an angle from degrees to radians.
+func radians(degrees float64) float64 {
+	return degrees * (math.Pi / 180)
+}
+
+// distanceTo returns the distance between two locations, in meters: the
+// length of the shortest path from one to the other on the surface of the
+// Earth, which is an arc of a great circle. It is computed with the haversine
+// formula.
+func (l location) distanceTo(other location) float64 {
+	v := math.Sin((radians(other.longitude) - radians(l.longitude)) / 2)
+	// Two locations that have the same longitude are on the same meridian:
+	// the distance is the difference between their latitudes, as an angle,
+	// times the radius.
+	if v == 0 {
+		return earthRadius * math.Abs(radians(other.latitude)-radians(l.latitude))
+	}
+
+	lat1, lat2 := radians(l.latitude), radians(other.latitude)
+	u := math.Sin((lat2 - lat1) / 2)
+	// The conversions to float64 keep every step of the computation rounded
+	// the same way on every kind of processor.
+	a := float64(u*u) + float64(math.Cos(lat1)*math.Cos(lat2)*v*v)
+	return 2 * earthRadius * math.Asin(math.Sqrt(a))
+}
+
+// geoUnits are the units a distance can be given or asked for in, by name,
+// along with how many meters they are worth.
+var geoUnits = map[string]float64{
+	"m":  1,
+	"km": 1000,
+	"ft": 0.3048,
+	"mi": 1609.34,
+}
+
+// parseGeoUnit returns how many meters the unit of the given name is worth.
+// Names are case-insensitive. On invalid input it returns the error reply to
+// send instead.
+func parseGeoUnit(name string) (float64, []byte) {
+	meters, ok := geoUnits[strings.ToLower(name)]
+	if !ok {
+		return 0, errorReply("ERR unsupported unit provided. please use M, KM, FT, MI")
+	}
+	return meters, nil
+}
+
 // parseLocation parses the coordinates of a location, given in degrees as
 // decimal numbers. On invalid input it returns the error reply to send
 // instead: coordinates have to be numbers, within the limits above.
@@ -212,4 +263,43 @@ func cmdGeoPos(c *client, args []string) []byte {
 		}
 	}
 	return arrayReply(positions...)
+}
+
+// cmdGeoDist implements GEODIST key member1 member2 [M | KM | FT | MI]: it
+// replies with the distance between the two members of the set of locations
+// stored at key, as a bulk string that holds a number with four digits after
+// the decimal point. The distance is in meters, unless another unit is asked
+// for: kilometers, feet or miles.
+//
+// The reply is a null bulk string if one of the members isn't in the set, or
+// if the key doesn't exist.
+func cmdGeoDist(c *client, args []string) []byte {
+	if len(args) > 4 {
+		return errorReply("ERR syntax error")
+	}
+	unit := 1.0
+	if len(args) == 4 {
+		var errReply []byte
+		if unit, errReply = parseGeoUnit(args[3]); errReply != nil {
+			return errReply
+		}
+	}
+
+	z, err := c.server.store.getSortedSet(args[0])
+	if err != nil {
+		return errorReply(err.Error())
+	}
+	if z == nil {
+		return nullBulkString
+	}
+	from, fromOK := z.scores[args[1]]
+	to, toOK := z.scores[args[2]]
+	if !fromOK || !toOK {
+		return nullBulkString
+	}
+
+	// The distance is the one between the positions the members are known
+	// to be at, which are those their scores stand for.
+	meters := locationOfScore(from).distanceTo(locationOfScore(to))
+	return bulkString(strconv.FormatFloat(meters/unit, 'f', 4, 64))
 }
