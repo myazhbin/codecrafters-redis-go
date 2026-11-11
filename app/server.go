@@ -1,9 +1,7 @@
 package main
 
 import (
-	"bufio"
 	"errors"
-	"fmt"
 	"net"
 	"sync"
 )
@@ -15,11 +13,18 @@ type Server struct {
 	// served by its own goroutine.
 	mu    sync.Mutex
 	store *store
+	// listWaiters holds, for each list key, the clients that are blocked
+	// waiting for an element to be pushed to it. The client that has been
+	// waiting the longest comes first.
+	listWaiters map[string][]*listWaiter
 }
 
 // NewServer returns a server with an empty keyspace that is ready to Serve.
 func NewServer() *Server {
-	return &Server{store: newStore()}
+	return &Server{
+		store:       newStore(),
+		listWaiters: make(map[string][]*listWaiter),
+	}
 }
 
 // Serve accepts connections on l and serves each client on its own goroutine,
@@ -35,25 +40,5 @@ func (s *Server) Serve(l net.Listener) error {
 			return err
 		}
 		go s.handleConnection(conn)
-	}
-}
-
-// handleConnection reads commands from the client one after another until it
-// disconnects, executing each of them and sending back its reply.
-func (s *Server) handleConnection(conn net.Conn) {
-	defer conn.Close()
-
-	reader := bufio.NewReader(conn)
-	for {
-		args, err := readCommand(reader)
-		if err != nil {
-			if errors.Is(err, errProtocol) {
-				fmt.Fprintf(conn, "-ERR %s\r\n", err)
-			}
-			return
-		}
-		if _, err := conn.Write(s.execute(args)); err != nil {
-			return
-		}
 	}
 }

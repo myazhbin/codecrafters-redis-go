@@ -12,7 +12,8 @@ import (
 // cmdSet implements SET key value [EX seconds | PX milliseconds]: it stores
 // value at key, overwriting whatever the key held before, including its
 // expiry.
-func cmdSet(s *Server, args []string) []byte {
+func cmdSet(c *client, args []string) []byte {
+	store := c.server.store
 	key, value := args[0], args[1]
 
 	// Options are parsed in full before any of their values is validated, so
@@ -34,13 +35,13 @@ func cmdSet(s *Server, args []string) []byte {
 	expiresAt := noExpiry
 	if unit != "" {
 		var errReply []byte
-		expiresAt, errReply = parseExpiry(unit, ttl, s.store.now())
+		expiresAt, errReply = parseExpiry(unit, ttl, store.now())
 		if errReply != nil {
 			return errReply
 		}
 	}
 
-	s.store.setString(key, value, expiresAt)
+	store.setString(key, value, expiresAt)
 	return simpleString("OK")
 }
 
@@ -74,8 +75,8 @@ func parseExpiry(unit, ttl string, now time.Time) (time.Time, []byte) {
 
 // cmdGet implements GET key: it replies with the string stored at key, or a
 // null bulk string if the key doesn't exist.
-func cmdGet(s *Server, args []string) []byte {
-	value, ok, err := s.store.getString(args[0])
+func cmdGet(c *client, args []string) []byte {
+	value, ok, err := c.server.store.getString(args[0])
 	if err != nil {
 		return errorReply(err.Error())
 	}

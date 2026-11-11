@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"io"
 	"net"
 	"strconv"
@@ -90,7 +91,6 @@ func dial(t *testing.T, addr string) net.Conn {
 		t.Fatalf("dial: %v", err)
 	}
 	t.Cleanup(func() { conn.Close() })
-	conn.SetDeadline(time.Now().Add(2 * time.Second))
 	return conn
 }
 
@@ -120,11 +120,15 @@ func do(t *testing.T, conn net.Conn, args ...string) {
 	send(t, conn, encodeCommand(args...))
 }
 
+// replyTimeout is how long tests wait for a reply before giving up.
+const replyTimeout = 2 * time.Second
+
 // expectReply reads exactly len(want) bytes and compares them to want, the
 // raw RESP encoding of the expected reply.
 func expectReply(t *testing.T, conn net.Conn, want string) {
 	t.Helper()
 
+	conn.SetReadDeadline(time.Now().Add(replyTimeout))
 	got := make([]byte, len(want))
 	if n, err := io.ReadFull(conn, got); err != nil {
 		t.Fatalf("reading reply: %v (got %q so far, want %q)", err, got[:n], want)
@@ -134,11 +138,43 @@ func expectReply(t *testing.T, conn net.Conn, want string) {
 	}
 }
 
+// expectNoReply checks that the server sends nothing for the duration d,
+// which is how a blocked client looks like from the outside.
+func expectNoReply(t *testing.T, conn net.Conn, d time.Duration) {
+	t.Helper()
+
+	conn.SetReadDeadline(time.Now().Add(d))
+	buf := make([]byte, 256)
+	n, err := conn.Read(buf)
+	if n > 0 {
+		t.Fatalf("unexpected reply while the client should be blocked: %q", buf[:n])
+	}
+	var netErr net.Error
+	if !errors.As(err, &netErr) || !netErr.Timeout() {
+		t.Fatalf("waiting for nothing to arrive: unexpected error: %v", err)
+	}
+}
+
+// eventually polls condition until it holds, and fails the test if it still
+// doesn't after a couple of seconds.
+func eventually(t *testing.T, what string, condition func() bool) {
+	t.Helper()
+
+	deadline := time.Now().Add(replyTimeout)
+	for !condition() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 // expectClosed checks that the server closed the connection without sending
 // anything more.
 func expectClosed(t *testing.T, conn net.Conn) {
 	t.Helper()
 
+	conn.SetReadDeadline(time.Now().Add(replyTimeout))
 	rest, err := io.ReadAll(conn)
 	if err != nil {
 		t.Fatalf("waiting for the server to close the connection: %v", err)

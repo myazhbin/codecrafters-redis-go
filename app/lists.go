@@ -1,6 +1,9 @@
 package main
 
-import "strconv"
+import (
+	"math"
+	"strconv"
+)
 
 // This file implements lists and the commands that operate on them.
 
@@ -68,16 +71,94 @@ func (l *list) slice(start, stop int) []string {
 	return l.items[start : stop+1]
 }
 
+// popFromList removes and returns the first element of the list l stored at
+// key, deleting the key if that leaves the list empty.
+func (s *Server) popFromList(key string, l *list) string {
+	element := l.popFront(1)[0]
+	if len(l.items) == 0 {
+		s.store.delete(key)
+	}
+	return element
+}
+
+// listWaiter is a client blocked in BLPOP, waiting for an element to be
+// pushed to one of several lists.
+type listWaiter struct {
+	// keys are the lists the client waits on, without duplicates.
+	keys []string
+	// served receives the element that was popped on behalf of the client.
+	// It is buffered so that handing over an element never blocks.
+	served chan poppedElement
+}
+
+// poppedElement is an element removed from the list stored at key.
+type poppedElement struct {
+	key, element string
+}
+
+// addListWaiter registers a client as waiting for an element on any of the
+// keys, behind the clients that are already waiting on them.
+func (s *Server) addListWaiter(keys []string) *listWaiter {
+	w := &listWaiter{served: make(chan poppedElement, 1)}
+	for _, key := range keys {
+		if !contains(w.keys, key) {
+			w.keys = append(w.keys, key)
+			s.listWaiters[key] = append(s.listWaiters[key], w)
+		}
+	}
+	return w
+}
+
+// removeListWaiter makes w stop waiting on all of its keys.
+func (s *Server) removeListWaiter(w *listWaiter) {
+	for _, key := range w.keys {
+		waiters := s.listWaiters[key]
+		for i, other := range waiters {
+			if other == w {
+				waiters = append(waiters[:i], waiters[i+1:]...)
+				break
+			}
+		}
+		if len(waiters) == 0 {
+			delete(s.listWaiters, key)
+		} else {
+			s.listWaiters[key] = waiters
+		}
+	}
+}
+
+// serveListWaiters hands the elements of the list stored at key over to the
+// clients blocked on that key, one element each, starting with the client
+// that has been waiting the longest. It must be called whenever elements are
+// added to a list, so that a list never holds elements while clients wait
+// for them.
+func (s *Server) serveListWaiters(key string) {
+	for len(s.listWaiters[key]) > 0 {
+		l, err := s.store.getList(key)
+		if err != nil || l == nil {
+			return
+		}
+		w := s.listWaiters[key][0]
+		s.removeListWaiter(w)
+		w.served <- poppedElement{key: key, element: s.popFromList(key, l)}
+	}
+}
+
+// contains reports whether items includes s.
+func contains(items []string, s string) bool {
+	for _, item := range items {
+		if item == s {
+			return true
+		}
+	}
+	return false
+}
+
 // cmdRPush implements RPUSH key element [element ...]: it appends the
 // elements to the list stored at key, creating the list if needed, and
 // replies with the new length of the list.
-func cmdRPush(s *Server, args []string) []byte {
-	l, err := s.store.getOrCreateList(args[0])
-	if err != nil {
-		return errorReply(err.Error())
-	}
-	l.pushBack(args[1:]...)
-	return integerReply(len(l.items))
+func cmdRPush(c *client, args []string) []byte {
+	return pushCommand(c, args, (*list).pushBack)
 }
 
 // cmdLPush implements LPUSH key element [element ...]: it inserts the
@@ -86,13 +167,27 @@ func cmdRPush(s *Server, args []string) []byte {
 //
 // Since each element is inserted in front of the previous one,
 // "LPUSH key a b c" on a new key produces the list [c b a].
-func cmdLPush(s *Server, args []string) []byte {
-	l, err := s.store.getOrCreateList(args[0])
+func cmdLPush(c *client, args []string) []byte {
+	return pushCommand(c, args, (*list).pushFront)
+}
+
+// pushCommand implements RPUSH and LPUSH, which only differ by the end of the
+// list that push adds the elements to.
+func pushCommand(c *client, args []string, push func(l *list, elements ...string)) []byte {
+	s := c.server
+	key := args[0]
+
+	l, err := s.store.getOrCreateList(key)
 	if err != nil {
 		return errorReply(err.Error())
 	}
-	l.pushFront(args[1:]...)
-	return integerReply(len(l.items))
+	push(l, args[1:]...)
+
+	// The reply is the length of the list right after the push, even if some
+	// of the new elements are immediately taken by blocked clients.
+	reply := integerReply(len(l.items))
+	s.serveListWaiters(key)
+	return reply
 }
 
 // cmdLPop implements LPOP key [count]: it removes elements from the start of
@@ -102,10 +197,11 @@ func cmdLPush(s *Server, args []string) []byte {
 // Without count, a single element is removed and sent as a bulk string, or a
 // null bulk string if the key doesn't exist. With count, up to count elements
 // are removed and sent as an array, or a null array if the key doesn't exist.
-func cmdLPop(s *Server, args []string) []byte {
+func cmdLPop(c *client, args []string) []byte {
 	if len(args) > 2 {
 		return wrongArgumentCountError("LPOP")
 	}
+	s := c.server
 	key := args[0]
 
 	hasCount := len(args) == 2
@@ -129,20 +225,86 @@ func cmdLPop(s *Server, args []string) []byte {
 		return nullBulkString
 	}
 
+	if !hasCount {
+		return bulkString(s.popFromList(key, l))
+	}
 	popped := l.popFront(count)
 	if len(l.items) == 0 {
 		s.store.delete(key)
 	}
-	if hasCount {
-		return bulkStringArray(popped)
+	return bulkStringArray(popped)
+}
+
+// cmdBLPop implements BLPOP key [key ...] timeout: it removes the first
+// element of the first of the given lists that has one, and replies with an
+// array holding the key of that list and the element.
+//
+// If all the lists are empty, the client is blocked until another client
+// pushes an element to one of them. When several clients are blocked on the
+// same list, the one that has been waiting the longest is served first.
+//
+// A timeout of 0 means "wait for as long as it takes".
+func cmdBLPop(c *client, args []string) []byte {
+	s := c.server
+	keys, rawTimeout := args[:len(args)-1], args[len(args)-1]
+
+	timeout, err := strconv.ParseFloat(rawTimeout, 64)
+	if err != nil || math.IsNaN(timeout) || math.IsInf(timeout, 0) {
+		return errorReply("ERR timeout is not a float or out of range")
 	}
-	return bulkString(popped[0])
+	if timeout < 0 {
+		return errorReply("ERR timeout is negative")
+	}
+
+	// If one of the lists already has an element there's no need to wait.
+	for _, key := range keys {
+		l, err := s.store.getList(key)
+		if err != nil {
+			return errorReply(err.Error())
+		}
+		if l != nil {
+			return bulkStringArray([]string{key, s.popFromList(key, l)})
+		}
+	}
+
+	// Wait for an element without holding the lock, so that other clients
+	// get a chance to push one.
+	w := s.addListWaiter(keys)
+	s.mu.Unlock()
+	var (
+		popped poppedElement
+		served bool
+	)
+	select {
+	case popped = <-w.served:
+		served = true
+	case <-c.ctx.Done():
+	}
+	s.mu.Lock()
+
+	if served {
+		return bulkStringArray([]string{popped.key, popped.element})
+	}
+
+	// The client disconnected while it was waiting. An element may still have
+	// been handed over to it before the lock was taken back; since nobody is
+	// there to receive it anymore, it goes back to the head of its list.
+	select {
+	case popped = <-w.served:
+		if l, err := s.store.getOrCreateList(popped.key); err == nil {
+			l.pushFront(popped.element)
+			s.serveListWaiters(popped.key)
+		}
+	default:
+		s.removeListWaiter(w)
+	}
+	return nil
 }
 
 // cmdLLen implements LLEN key: it replies with the number of elements of the
 // list stored at key, which is 0 if the key doesn't exist.
-func cmdLLen(s *Server, args []string) []byte {
-	l, err := s.store.getList(args[0])
+func cmdLLen(c *client, args []string) []byte {
+	l, err := c.server.store.getList(args[0])
 	if err != nil {
 		return errorReply(err.Error())
 	}
@@ -156,14 +318,14 @@ func cmdLLen(s *Server, args []string) []byte {
 // the list stored at key from index start to index stop, both included.
 // Negative indexes count from the end of the list. A list that doesn't exist
 // is treated as an empty one.
-func cmdLRange(s *Server, args []string) []byte {
+func cmdLRange(c *client, args []string) []byte {
 	start, startErr := strconv.Atoi(args[1])
 	stop, stopErr := strconv.Atoi(args[2])
 	if startErr != nil || stopErr != nil {
 		return errorReply("ERR value is not an integer or out of range")
 	}
 
-	l, err := s.store.getList(args[0])
+	l, err := c.server.store.getList(args[0])
 	if err != nil {
 		return errorReply(err.Error())
 	}

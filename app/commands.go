@@ -2,12 +2,15 @@ package main
 
 import "strings"
 
-// handler runs a command and returns its RESP-encoded reply. args holds the
-// command's arguments, without the command name.
+// handler runs a command and returns its RESP-encoded reply, or nil if
+// nothing must be sent to the client. args holds the command's arguments,
+// without the command name.
 //
 // Handlers are called with the server's lock held, so they can freely use the
-// server's state and each command is atomic with respect to the others.
-type handler func(s *Server, args []string) []byte
+// server's state and each command is atomic with respect to the others. A
+// handler that has to wait for something releases the lock while it waits,
+// and must hold it again when it returns.
+type handler func(c *client, args []string) []byte
 
 // command describes a command the server knows about.
 type command struct {
@@ -29,11 +32,12 @@ var commands = map[string]command{
 	"LRANGE": {arity: 4, handler: cmdLRange},
 	"LLEN":   {arity: 2, handler: cmdLLen},
 	"LPOP":   {arity: -2, handler: cmdLPop},
+	"BLPOP":  {arity: -3, handler: cmdBLPop},
 }
 
-// execute runs a single client command and returns the reply to send back.
-// Command names are case-insensitive.
-func (s *Server) execute(args []string) []byte {
+// execute runs a single command sent by the client and returns the reply to
+// send back, or nil if there is none. Command names are case-insensitive.
+func (c *client) execute(args []string) []byte {
 	name := strings.ToUpper(args[0])
 
 	cmd, ok := commands[name]
@@ -44,9 +48,9 @@ func (s *Server) execute(args []string) []byte {
 		return wrongArgumentCountError(name)
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return cmd.handler(s, args[1:])
+	c.server.mu.Lock()
+	defer c.server.mu.Unlock()
+	return cmd.handler(c, args[1:])
 }
 
 // unknownCommandError mirrors the error Redis sends for unknown commands.
@@ -66,7 +70,7 @@ func wrongArgumentCountError(name string) []byte {
 }
 
 // cmdPing implements PING [message]: it replies PONG, or echoes the message.
-func cmdPing(s *Server, args []string) []byte {
+func cmdPing(c *client, args []string) []byte {
 	switch len(args) {
 	case 0:
 		return simpleString("PONG")
@@ -78,6 +82,6 @@ func cmdPing(s *Server, args []string) []byte {
 }
 
 // cmdEcho implements ECHO message: it replies with the message itself.
-func cmdEcho(s *Server, args []string) []byte {
+func cmdEcho(c *client, args []string) []byte {
 	return bulkString(args[0])
 }
