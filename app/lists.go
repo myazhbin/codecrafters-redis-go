@@ -248,6 +248,12 @@ func cmdBLPop(c *client, args []string) []byte {
 		}
 	}
 
+	// Inside a transaction there's no waiting: other clients can't push
+	// anything before the transaction is over anyway.
+	if c.executing {
+		return nullArray
+	}
+
 	// A nil channel is never ready: without timeout the wait has no deadline.
 	var expired <-chan time.Time
 	if timeout > 0 {

@@ -444,7 +444,9 @@ func cmdXRead(c *client, args []string) []byte {
 		}
 	}
 
-	if reply := s.readStreams(parsed.keys, ids); reply != nil || !parsed.block {
+	// Inside a transaction there's no waiting, even with BLOCK: other clients
+	// can't add anything before the transaction is over anyway.
+	if reply := s.readStreams(parsed.keys, ids); reply != nil || !parsed.block || c.executing {
 		return orNullArray(reply)
 	}
 

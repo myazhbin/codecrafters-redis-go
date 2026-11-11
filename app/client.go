@@ -26,6 +26,10 @@ type client struct {
 	// queued holds the commands received since MULTI, in order. They are not
 	// executed until the transaction is.
 	queued []queuedCommand
+	// executing is set while EXEC runs the queued commands. Commands that
+	// would otherwise block must not do so then: a transaction runs from
+	// start to finish without letting any other client in.
+	executing bool
 }
 
 // queuedCommand is a command waiting in a transaction.
