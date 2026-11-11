@@ -50,6 +50,9 @@ type client struct {
 	// would otherwise block must not do so then: a transaction runs from
 	// start to finish without letting any other client in.
 	executing bool
+	// subscriptions is the set of channels the client is subscribed to with
+	// SUBSCRIBE.
+	subscriptions map[string]struct{}
 }
 
 // queuedCommand is a command waiting in a transaction.

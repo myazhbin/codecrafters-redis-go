@@ -149,9 +149,11 @@ func (s *Server) syncAOFPeriodically(file *os.File, interval time.Duration, stop
 // had when it logged them. A file that doesn't exist holds no command.
 //
 // A server that stops abruptly can leave a command half written at the end of
-// the file. Such a command is dropped, and cut off the file so that the
-// commands logged from now on are appended to a clean log. A file that is
-// invalid anywhere else isn't replayed at all: it is an error.
+// the file, or a transaction without its EXEC. What is incomplete is dropped,
+// and cut off the file so that the commands logged from now on are appended
+// to a clean log: left in place, a transaction that was never finished would
+// swallow them the next time the file is replayed. A file that is invalid
+// anywhere else isn't replayed at all: it is an error.
 func (s *Server) replayAOF(path string) error {
 	file, err := os.Open(path)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -186,17 +188,24 @@ func (s *Server) replayAOF(path string) error {
 
 	read := &countingReader{r: file}
 	r := bufio.NewReader(read)
+	// complete is how much of the file is known to be whole: what comes
+	// before it has been replayed for good. A transaction only counts once
+	// its EXEC has been read, as its commands have no effect before that.
+	var complete int64
 	for {
 		// Where the command that is about to be read starts in the file.
 		start := read.n - int64(r.Buffered())
+		if !replayer.inTransaction {
+			complete = start
+		}
 
 		args, err := readCommand(r)
 		switch {
-		case err == io.EOF:
+		case err == io.EOF && !replayer.inTransaction:
 			return nil
-		case errors.Is(err, io.ErrUnexpectedEOF):
-			fmt.Fprintf(os.Stderr, "The append-only file ends with an incomplete command: truncating it to %d bytes\n", start)
-			return os.Truncate(path, start)
+		case err == io.EOF, errors.Is(err, io.ErrUnexpectedEOF):
+			fmt.Fprintf(os.Stderr, "The append-only file ends with an incomplete command or transaction: truncating it to %d bytes\n", complete)
+			return os.Truncate(path, complete)
 		case err != nil:
 			return fmt.Errorf("at offset %d: %w", start, err)
 		}
