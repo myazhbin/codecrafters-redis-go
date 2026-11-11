@@ -147,3 +147,13 @@ func expectClosed(t *testing.T, conn net.Conn) {
 		t.Fatalf("unexpected extra data before close: %q", rest)
 	}
 }
+
+// bulkArray returns the RESP encoding of an array of bulk strings.
+func bulkArray(items ...string) string {
+	var b strings.Builder
+	b.WriteString("*" + strconv.Itoa(len(items)) + "\r\n")
+	for _, item := range items {
+		b.WriteString("$" + strconv.Itoa(len(item)) + "\r\n" + item + "\r\n")
+	}
+	return b.String()
+}

@@ -33,3 +33,16 @@ func bulkString(s string) []byte {
 // nullBulkString is the reply for a string that doesn't exist. It is distinct
 // from the empty string, which is encoded as "$0\r\n\r\n".
 var nullBulkString = []byte("$-1\r\n")
+
+// bulkStringArray encodes an array whose elements are all bulk strings. An
+// empty (or nil) slice is encoded as the empty array, "*0\r\n".
+func bulkStringArray(items []string) []byte {
+	b := make([]byte, 0, 16+16*len(items))
+	b = append(b, '*')
+	b = strconv.AppendInt(b, int64(len(items)), 10)
+	b = append(b, '\r', '\n')
+	for _, item := range items {
+		b = append(b, bulkString(item)...)
+	}
+	return b
+}

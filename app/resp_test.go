@@ -135,6 +135,10 @@ func TestReplyEncoding(t *testing.T) {
 		{"empty bulk string", bulkString(""), "$0\r\n\r\n"},
 		{"bulk string length is in bytes", bulkString("héllo"), "$6\r\nhéllo\r\n"},
 		{"bulk string with CRLF", bulkString("a\r\nb"), "$4\r\na\r\nb\r\n"},
+		{"array of bulk strings", bulkStringArray([]string{"a", "bc"}), "*2\r\n$1\r\na\r\n$2\r\nbc\r\n"},
+		{"array with an empty bulk string", bulkStringArray([]string{""}), "*1\r\n$0\r\n\r\n"},
+		{"empty array", bulkStringArray([]string{}), "*0\r\n"},
+		{"nil slice is the empty array", bulkStringArray(nil), "*0\r\n"},
 	}
 
 	for _, tt := range tests {

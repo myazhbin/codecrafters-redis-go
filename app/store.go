@@ -18,6 +18,25 @@ type list struct {
 	items []string
 }
 
+// slice returns the elements of the list from index start to index stop,
+// both included. Indexes start at 0. A stop index past the end of the list
+// means "up to the last element", and a range that covers no element (such as
+// one starting after the end of the list, or after its own stop) is empty.
+//
+// The result shares its memory with the list and must not be modified.
+func (l *list) slice(start, stop int) []string {
+	if start < 0 {
+		start = 0
+	}
+	if stop >= len(l.items) {
+		stop = len(l.items) - 1
+	}
+	if start > stop {
+		return nil
+	}
+	return l.items[start : stop+1]
+}
+
 // entry is what the keyspace stores for a key.
 type entry struct {
 	// value is the key's value. Its dynamic type is the type of the key:
