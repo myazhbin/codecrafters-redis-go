@@ -89,6 +89,8 @@ var commands = map[string]command{
 	"GEODIST":   {arity: -4, handler: cmdGeoDist},
 	"GEOSEARCH": {arity: -7, handler: cmdGeoSearch},
 
+	"ACL": {arity: -2, handler: cmdACL, container: true},
+
 	"SUBSCRIBE":   {arity: -2, handler: cmdSubscribe, pubsub: true},
 	"UNSUBSCRIBE": {arity: -1, handler: cmdUnsubscribe, pubsub: true},
 	"PUBLISH":     {arity: 3, handler: cmdPublish},

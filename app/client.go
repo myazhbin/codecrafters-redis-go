@@ -58,6 +58,8 @@ type client struct {
 	// subscriptions is the set of channels the client is subscribed to with
 	// SUBSCRIBE.
 	subscriptions map[string]struct{}
+	// user is the user the client is authenticated as.
+	user *user
 }
 
 // queuedCommand is a command waiting in a transaction.
@@ -81,7 +83,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	c := &client{server: s, conn: conn, ctx: ctx}
+	c := &client{server: s, conn: conn, ctx: ctx, user: s.defaultUser}
 	defer func() {
 		// A client that is gone must not stay registered as a watcher, as a
 		// subscriber or as a replica, and nothing more is sent to it.

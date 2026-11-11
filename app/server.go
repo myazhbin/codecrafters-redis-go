@@ -78,6 +78,9 @@ type Server struct {
 	// subscribers holds the clients subscribed to a channel with SUBSCRIBE,
 	// by channel. Channels nobody is subscribed to have no entry.
 	subscribers map[string]map[*client]struct{}
+	// defaultUser is the user clients are authenticated as when they
+	// connect. It is the same one for as long as the server runs.
+	defaultUser *user
 }
 
 // NewServer returns a server with an empty keyspace and the default
@@ -100,6 +103,7 @@ func NewServerWithConfig(cfg config) *Server {
 		subscribers:     make(map[string]map[*client]struct{}),
 		replicas:        make(map[*client]struct{}),
 		ackWaiters:      make(map[*ackWaiter]struct{}),
+		defaultUser:     &user{name: defaultUserName},
 	}
 	s.store.onModify = s.keyModified
 	return s
