@@ -410,7 +410,11 @@ func parseXReadArgs(args []string) (xreadArgs, []byte) {
 //
 // When no stream has any entry to return the reply is a null array, unless
 // BLOCK is given: the client then waits until an entry is added to one of the
-// streams, for at most the given number of milliseconds.
+// streams, for at most the given number of milliseconds (0 meaning forever).
+//
+// An ID can be "$" to designate the last entry the stream has when the
+// command is received. Combined with BLOCK, it means "wait for the next
+// entry".
 func cmdXRead(c *client, args []string) []byte {
 	s := c.server
 
@@ -422,10 +426,19 @@ func cmdXRead(c *client, args []string) []byte {
 	// Every argument is validated before anything is read.
 	ids := make([]streamID, len(parsed.keys))
 	for i, key := range parsed.keys {
-		if _, err := s.store.getStream(key); err != nil {
+		st, err := s.store.getStream(key)
+		if err != nil {
 			return errorReply(err.Error())
 		}
-		var err error
+		if parsed.ids[i] == "$" {
+			// "$" is the ID of the last entry of the stream as of now, so
+			// that only entries added from now on are returned. A stream
+			// that doesn't exist yet has no last entry: its ID stays 0-0.
+			if st != nil {
+				ids[i] = st.lastID
+			}
+			continue
+		}
 		if ids[i], err = parseStreamID(parsed.ids[i], 0); err != nil {
 			return errorReply(err.Error())
 		}
