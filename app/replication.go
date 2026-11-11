@@ -66,6 +66,11 @@ func (s *Server) followMaster() error {
 //     its own clients on.
 //   - REPLCONF capa psync2 tells the master the replica understands the
 //     second version of the synchronization protocol.
+//   - PSYNC asks the master to bring the replica up to date. A replica that
+//     has nothing yet doesn't know its master's replication ID and has no
+//     offset, which it says by sending "?" and -1. The master answers with
+//     FULLRESYNC, followed by its replication ID and its offset: the replica
+//     is going to receive the whole dataset.
 func (s *Server) handshake(w io.Writer, r *bufio.Reader) error {
 	steps := []struct {
 		command []string
@@ -87,7 +92,32 @@ func (s *Server) handshake(w io.Writer, r *bufio.Reader) error {
 				strings.Join(step.command, " "), reply, "+"+step.reply)
 		}
 	}
+
+	reply, err := roundTrip(w, r, "PSYNC", "?", "-1")
+	if err != nil {
+		return fmt.Errorf("PSYNC: %w", err)
+	}
+	if _, _, err := parseFullResync(reply); err != nil {
+		return fmt.Errorf("PSYNC: %w", err)
+	}
 	return nil
+}
+
+// parseFullResync parses the master's reply to PSYNC when it announces a full
+// synchronization, "+FULLRESYNC <replication ID> <offset>", and returns the
+// master's replication ID and offset.
+func parseFullResync(reply string) (replID string, offset int64, err error) {
+	invalid := fmt.Errorf("unexpected reply %q from the master, want \"+FULLRESYNC <replication ID> <offset>\"", reply)
+
+	parts := strings.Fields(reply)
+	if len(parts) != 3 || parts[0] != "+FULLRESYNC" {
+		return "", 0, invalid
+	}
+	offset, ok := parseInt(parts[2])
+	if !ok || offset < 0 {
+		return "", 0, invalid
+	}
+	return parts[1], offset, nil
 }
 
 // roundTrip sends a command and waits for its reply, which must fit on a
