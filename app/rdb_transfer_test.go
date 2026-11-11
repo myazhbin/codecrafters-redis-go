@@ -10,9 +10,9 @@ import (
 	"time"
 )
 
-// readRDBTransfer reads an RDB file sent the way a master sends it,
+// receiveRDBTransfer reads an RDB file sent the way a master sends it,
 // "$<length>\r\n<contents>", and returns the contents.
-func readRDBTransfer(t *testing.T, conn net.Conn) []byte {
+func receiveRDBTransfer(t *testing.T, conn net.Conn) []byte {
 	t.Helper()
 
 	header := readReplyLine(t, conn)
@@ -45,7 +45,7 @@ func TestMasterSendsAnRDBFileAfterFullResync(t *testing.T) {
 	do(t, conn, "PSYNC", "?", "-1")
 	expectReply(t, conn, "+FULLRESYNC "+srv.replID+" 0\r\n")
 
-	file := readRDBTransfer(t, conn)
+	file := receiveRDBTransfer(t, conn)
 	if !bytes.Equal(file, emptyRDB()) {
 		t.Errorf("RDB file = %x, want the empty RDB file", file)
 	}
@@ -56,7 +56,7 @@ func TestRDBTransferHasNoTrailingCRLF(t *testing.T) {
 
 	do(t, conn, "PSYNC", "?", "-1")
 	readReplyLine(t, conn)
-	readRDBTransfer(t, conn)
+	receiveRDBTransfer(t, conn)
 
 	// Unlike a bulk string, the file isn't followed by CRLF: the next thing
 	// on the connection is the reply to the next command.
@@ -118,7 +118,7 @@ func TestEveryReplicaGetsTheRDBFile(t *testing.T) {
 		handshakeUntilPsync(t, replica)
 		do(t, replica, "PSYNC", "?", "-1")
 		expectReply(t, replica, "+FULLRESYNC "+srv.replID+" 0\r\n")
-		if file := readRDBTransfer(t, replica); !bytes.Equal(file, emptyRDB()) {
+		if file := receiveRDBTransfer(t, replica); !bytes.Equal(file, emptyRDB()) {
 			t.Errorf("RDB file = %x, want the empty RDB file", file)
 		}
 	}

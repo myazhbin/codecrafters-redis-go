@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -34,8 +35,10 @@ func newReplicationID() string {
 const masterDialTimeout = 5 * time.Second
 
 // followMaster makes a replica connect to its master, introduce itself with
-// the replication handshake, and then stay connected. It only returns once
-// the connection is over, with the error that ended it if there is one.
+// the replication handshake, receive the master's snapshot and then apply
+// the commands the master propagates, for as long as the connection lasts. It
+// only returns once the connection is over, with the error that ended it if
+// there is one.
 func (s *Server) followMaster() error {
 	master := s.cfg.replicaOf.String()
 
@@ -50,12 +53,69 @@ func (s *Server) followMaster() error {
 		return fmt.Errorf("handshake with the master at %s: %w", master, err)
 	}
 
-	// Nothing is done with what the master sends yet: the connection is kept
-	// open until the master closes it.
-	if _, err := io.Copy(io.Discard, r); err != nil {
+	if _, err := readRDBTransfer(r); err != nil {
+		return fmt.Errorf("receiving the snapshot of the master at %s: %w", master, err)
+	}
+
+	if err := s.applyReplicationStream(conn, r); err != nil {
 		return fmt.Errorf("reading from the master at %s: %w", master, err)
 	}
 	return nil
+}
+
+// readRDBTransfer reads the RDB file a master sends after FULLRESYNC, as
+// "$<length>\r\n<contents>", and returns its contents. Unlike a bulk string,
+// the contents aren't followed by CRLF.
+func readRDBTransfer(r *bufio.Reader) ([]byte, error) {
+	header, err := readLine(r)
+	if err != nil {
+		return nil, midCommand(err)
+	}
+	if !strings.HasPrefix(header, "$") {
+		return nil, fmt.Errorf("%w: expected '$', got '%s'", errProtocol, firstChar(header))
+	}
+	length, err := strconv.Atoi(header[1:])
+	if err != nil || length < 0 || length > maxBulkLength {
+		return nil, fmt.Errorf("%w: invalid RDB file length", errProtocol)
+	}
+
+	file := make([]byte, length)
+	if _, err := io.ReadFull(r, file); err != nil {
+		return nil, midCommand(err)
+	}
+	return file, nil
+}
+
+// applyReplicationStream executes the commands the master propagates over
+// conn, one after another, until the connection is over. They are executed
+// exactly like the commands of a client, except that the master isn't sent
+// any reply: it doesn't expect one.
+//
+// It returns nil when the master closes the connection between two commands,
+// and the error that made reading fail otherwise.
+func (s *Server) applyReplicationStream(conn net.Conn, r *bufio.Reader) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// The master is a client like any other for the commands it runs, with
+	// its own transaction state.
+	master := &client{server: s, conn: conn, ctx: ctx}
+	defer func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		master.unwatch()
+	}()
+
+	for {
+		args, err := readCommand(r)
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		master.execute(args)
+	}
 }
 
 // handshake is how a replica introduces itself to its master, over the

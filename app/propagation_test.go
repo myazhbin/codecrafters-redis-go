@@ -20,7 +20,7 @@ func connectReplica(t *testing.T, addr string) net.Conn {
 	if line := readReplyLine(t, conn); !strings.HasPrefix(line, "+FULLRESYNC ") {
 		t.Fatalf("reply to PSYNC = %q, want +FULLRESYNC", line)
 	}
-	readRDBTransfer(t, conn)
+	receiveRDBTransfer(t, conn)
 	return conn
 }
 
