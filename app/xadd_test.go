@@ -117,6 +117,7 @@ func TestXAddIDFormats(t *testing.T) {
 		{"milliseconds and sequence", "1526919030474-3", "1526919030474-3"},
 		{"milliseconds only means sequence 0", "1526919030474", "1526919030474-0"},
 		{"zero milliseconds", "0-1", "0-1"},
+		{"zero sequence", "1-0", "1-0"},
 		{"leading zeros are dropped", "007-01", "7-1"},
 		{"largest possible ID", "18446744073709551615-18446744073709551615", "18446744073709551615-18446744073709551615"},
 	}
