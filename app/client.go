@@ -26,6 +26,8 @@ type client struct {
 	// queued holds the commands received since MULTI, in order. They are not
 	// executed until the transaction is.
 	queued []queuedCommand
+	// watched is the set of keys the client asked to monitor with WATCH.
+	watched map[string]struct{}
 	// executing is set while EXEC runs the queued commands. Commands that
 	// would otherwise block must not do so then: a transaction runs from
 	// start to finish without letting any other client in.

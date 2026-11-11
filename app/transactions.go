@@ -53,9 +53,20 @@ func cmdDiscard(c *client, args []string) []byte {
 
 // cmdWatch implements WATCH key [key ...]: it asks the server to monitor the
 // keys for changes, so that a later transaction can be made conditional on
-// them not having been modified (optimistic locking).
+// them not having been modified (optimistic locking). The keys are remembered
+// for the client's connection.
 //
-// The keys aren't tracked yet: the command is accepted and acknowledged.
+// WATCH comes before the transaction it protects: calling it once MULTI has
+// started one is an error. The transaction itself goes on unaffected.
 func cmdWatch(c *client, args []string) []byte {
+	if c.inTransaction {
+		return errorReply("ERR WATCH inside MULTI is not allowed")
+	}
+	if c.watched == nil {
+		c.watched = make(map[string]struct{})
+	}
+	for _, key := range args {
+		c.watched[key] = struct{}{}
+	}
 	return simpleString("OK")
 }
