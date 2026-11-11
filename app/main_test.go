@@ -1,17 +1,19 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
 const pingCommand = "*1\r\n$4\r\nPING\r\n"
 
-// startTestServer serves a single connection with handleConnection on a random
-// local port and returns the address to dial.
+// startTestServer runs a Server on a random local port for the duration of the
+// test and returns the address to dial.
 func startTestServer(t *testing.T) string {
 	t.Helper()
 
@@ -19,15 +21,21 @@ func startTestServer(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	t.Cleanup(func() { l.Close() })
 
-	go func() {
-		conn, err := l.Accept()
-		if err != nil {
-			return
+	done := make(chan error, 1)
+	go func() { done <- NewServer().Serve(l) }()
+
+	t.Cleanup(func() {
+		l.Close()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("Serve returned an error: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Errorf("Serve did not return after the listener was closed")
 		}
-		handleConnection(conn)
-	}()
+	})
 
 	return l.Addr().String()
 }
@@ -135,4 +143,89 @@ func TestProtocolErrorClosesConnection(t *testing.T) {
 	send(t, conn, "*1\r\n+PING\r\n")
 	expectReply(t, conn, "-ERR Protocol error: expected '$', got '+'\r\n")
 	expectClosed(t, conn)
+}
+
+func TestHandlesConcurrentClients(t *testing.T) {
+	addr := startTestServer(t)
+
+	// Both clients are connected before either of them sends anything.
+	first := dial(t, addr)
+	second := dial(t, addr)
+
+	// The client that connected last is served even though the first one is
+	// still connected and idle.
+	send(t, second, pingCommand)
+	expectReply(t, second, "+PONG\r\n")
+
+	send(t, first, pingCommand)
+	expectReply(t, first, "+PONG\r\n")
+
+	// Interleaved commands on both connections.
+	for i := 0; i < 3; i++ {
+		send(t, first, pingCommand)
+		send(t, second, pingCommand)
+		expectReply(t, second, "+PONG\r\n")
+		expectReply(t, first, "+PONG\r\n")
+	}
+}
+
+func TestHandlesManyClientsInParallel(t *testing.T) {
+	addr := startTestServer(t)
+
+	const clients, pingsPerClient = 25, 10
+
+	// Connect everyone up front so all connections are open at the same time.
+	conns := make([]net.Conn, clients)
+	for i := range conns {
+		conns[i] = dial(t, addr)
+	}
+
+	errs := make(chan error, clients)
+	var wg sync.WaitGroup
+	for i, conn := range conns {
+		wg.Add(1)
+		go func(id int, conn net.Conn) {
+			defer wg.Done()
+			reply := make([]byte, len("+PONG\r\n"))
+			for n := 0; n < pingsPerClient; n++ {
+				if _, err := conn.Write([]byte(pingCommand)); err != nil {
+					errs <- fmt.Errorf("client %d: write: %w", id, err)
+					return
+				}
+				if _, err := io.ReadFull(conn, reply); err != nil {
+					errs <- fmt.Errorf("client %d: read: %w", id, err)
+					return
+				}
+				if string(reply) != "+PONG\r\n" {
+					errs <- fmt.Errorf("client %d: reply = %q, want +PONG", id, reply)
+					return
+				}
+			}
+		}(i, conn)
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		t.Error(err)
+	}
+}
+
+func TestClientDisconnectDoesNotAffectOthers(t *testing.T) {
+	addr := startTestServer(t)
+
+	leaving := dial(t, addr)
+	staying := dial(t, addr)
+
+	send(t, leaving, pingCommand)
+	expectReply(t, leaving, "+PONG\r\n")
+	leaving.Close()
+
+	send(t, staying, pingCommand)
+	expectReply(t, staying, "+PONG\r\n")
+
+	// New clients are still accepted afterwards.
+	late := dial(t, addr)
+	send(t, late, pingCommand)
+	expectReply(t, late, "+PONG\r\n")
 }
