@@ -248,14 +248,14 @@ func TestParseStreamID(t *testing.T) {
 		{"18446744073709551615-18446744073709551615", streamID{1<<64 - 1, 1<<64 - 1}},
 	}
 	for _, tt := range valid {
-		got, err := parseStreamID(tt.input)
+		got, err := parseStreamID(tt.input, 0)
 		if err != nil || got != tt.want {
 			t.Errorf("parseStreamID(%q) = (%v, %v), want (%v, nil)", tt.input, got, err, tt.want)
 		}
 	}
 
 	for _, input := range []string{"", "-", "a", "1-", "-1", "1-2-3", "1-b", "1.0", "18446744073709551616"} {
-		if got, err := parseStreamID(input); !errors.Is(err, errInvalidStreamID) {
+		if got, err := parseStreamID(input, 0); !errors.Is(err, errInvalidStreamID) {
 			t.Errorf("parseStreamID(%q) = (%v, %v), want errInvalidStreamID", input, got, err)
 		}
 	}
@@ -275,5 +275,20 @@ func TestStreamIDString(t *testing.T) {
 		if got := tt.id.String(); got != tt.want {
 			t.Errorf("String() = %q, want %q", got, tt.want)
 		}
+	}
+}
+
+func TestParseStreamIDMissingSequenceNumber(t *testing.T) {
+	const maxUint64 = 1<<64 - 1
+
+	// The default only applies when the sequence number is left out.
+	if got, _ := parseStreamID("5", maxUint64); got != (streamID{5, maxUint64}) {
+		t.Errorf(`parseStreamID("5", max) = %v, want 5-%d`, got, uint64(maxUint64))
+	}
+	if got, _ := parseStreamID("5-3", maxUint64); got != (streamID{5, 3}) {
+		t.Errorf(`parseStreamID("5-3", max) = %v, want 5-3`, got)
+	}
+	if got, _ := parseStreamID("5-0", maxUint64); got != (streamID{5, 0}) {
+		t.Errorf(`parseStreamID("5-0", max) = %v, want 5-0`, got)
 	}
 }

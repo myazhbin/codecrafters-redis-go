@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"errors"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -60,15 +61,15 @@ var (
 )
 
 // parseStreamID parses an explicit entry ID: "<milliseconds>-<sequence>", or
-// just "<milliseconds>" in which case the sequence number is 0.
-func parseStreamID(s string) (streamID, error) {
+// just "<milliseconds>" in which case the sequence number is missingSeq.
+func parseStreamID(s string, missingSeq uint64) (streamID, error) {
 	msPart, seqPart, hasSeq := strings.Cut(s, "-")
 
 	ms, err := strconv.ParseUint(msPart, 10, 64)
 	if err != nil {
 		return streamID{}, errInvalidStreamID
 	}
-	var seq uint64
+	seq := missingSeq
 	if hasSeq {
 		seq, err = strconv.ParseUint(seqPart, 10, 64)
 		if err != nil {
@@ -110,7 +111,7 @@ func parseNewEntryID(s string) (newEntryID, error) {
 		return newEntryID{id: streamID{ms: ms}, autoSeq: true}, nil
 	}
 
-	id, err := parseStreamID(s)
+	id, err := parseStreamID(s, 0)
 	if err != nil {
 		return newEntryID{}, err
 	}
@@ -176,6 +177,36 @@ func (st *stream) add(spec newEntryID, fields []string, now time.Time) (streamID
 	return id, nil
 }
 
+// between returns the entries whose ID is between start and end, both
+// included, in the order of their IDs.
+//
+// The result shares its memory with the stream and must not be modified.
+func (st *stream) between(start, end streamID) []streamEntry {
+	// Entries are sorted by ID, so both ends of the range can be found by
+	// binary search.
+	from := sort.Search(len(st.entries), func(i int) bool {
+		return st.entries[i].id.compare(start) >= 0
+	})
+	to := sort.Search(len(st.entries), func(i int) bool {
+		return st.entries[i].id.compare(end) > 0
+	})
+	if from >= to {
+		return nil
+	}
+	return st.entries[from:to]
+}
+
+// entriesReply encodes stream entries as an array with one element per entry.
+// Each element is itself an array of two elements: the ID of the entry, and
+// the array of its fields and values.
+func entriesReply(entries []streamEntry) []byte {
+	items := make([][]byte, len(entries))
+	for i, e := range entries {
+		items[i] = arrayReply(bulkString(e.id.String()), bulkStringArray(e.fields))
+	}
+	return arrayReply(items...)
+}
+
 // cmdXAdd implements XADD key id field value [field value ...]: it appends
 // an entry to the stream stored at key, creating the stream if needed, and
 // replies with the ID of the new entry.
@@ -219,4 +250,30 @@ func cmdXAdd(c *client, args []string) []byte {
 		store.setStream(key, st)
 	}
 	return bulkString(id.String())
+}
+
+// cmdXRange implements XRANGE key start end: it replies with the entries of
+// the stream stored at key whose ID is between start and end, both included.
+//
+// The sequence number of both IDs is optional. When it's left out the whole
+// millisecond is covered: start begins at the first sequence number, and end
+// stops at the last one.
+func cmdXRange(c *client, args []string) []byte {
+	start, err := parseStreamID(args[1], 0)
+	if err != nil {
+		return errorReply(err.Error())
+	}
+	end, err := parseStreamID(args[2], math.MaxUint64)
+	if err != nil {
+		return errorReply(err.Error())
+	}
+
+	st, err := c.server.store.getStream(args[0])
+	if err != nil {
+		return errorReply(err.Error())
+	}
+	if st == nil {
+		return arrayReply()
+	}
+	return entriesReply(st.between(start, end))
 }

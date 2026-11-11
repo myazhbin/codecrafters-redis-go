@@ -234,3 +234,15 @@ func readBulkString(t *testing.T, conn net.Conn) string {
 	}
 	return string(payload[:length])
 }
+
+// array returns the RESP encoding of an array whose elements are the given,
+// already encoded, values.
+func array(items ...string) string {
+	return "*" + strconv.Itoa(len(items)) + "\r\n" + strings.Join(items, "")
+}
+
+// entryReply returns the RESP encoding of a stream entry: an array holding
+// its ID and the array of its fields and values.
+func entryReply(id string, fields ...string) string {
+	return array(bulk(id), bulkArray(fields...))
+}

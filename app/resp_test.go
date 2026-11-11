@@ -140,6 +140,10 @@ func TestReplyEncoding(t *testing.T) {
 		{"empty array", bulkStringArray([]string{}), "*0\r\n"},
 		{"nil slice is the empty array", bulkStringArray(nil), "*0\r\n"},
 		{"null array", nullArray, "*-1\r\n"},
+		{"array without elements", arrayReply(), "*0\r\n"},
+		{"array of mixed types", arrayReply(integerReply(1), bulkString("a"), simpleString("OK")), "*3\r\n:1\r\n$1\r\na\r\n+OK\r\n"},
+		{"nested arrays", arrayReply(bulkString("id"), bulkStringArray([]string{"k", "v"})), "*2\r\n$2\r\nid\r\n*2\r\n$1\r\nk\r\n$1\r\nv\r\n"},
+		{"array holding an empty array", arrayReply(arrayReply()), "*1\r\n*0\r\n"},
 		{"null bulk string", nullBulkString, "$-1\r\n"},
 	}
 

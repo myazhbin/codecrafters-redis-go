@@ -35,7 +35,8 @@ var commands = map[string]command{
 	"LPOP":   {arity: -2, handler: cmdLPop},
 	"BLPOP":  {arity: -3, handler: cmdBLPop},
 
-	"XADD": {arity: -5, handler: cmdXAdd},
+	"XADD":   {arity: -5, handler: cmdXAdd},
+	"XRANGE": {arity: 4, handler: cmdXRange},
 }
 
 // execute runs a single command sent by the client and returns the reply to

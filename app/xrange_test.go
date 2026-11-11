@@ -1,0 +1,260 @@
+package main
+
+import (
+	"reflect"
+	"testing"
+)
+
+func TestXRange(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	do(t, conn, "XADD", "stream_key", "0-1", "foo", "bar")
+	expectReply(t, conn, "$3\r\n0-1\r\n")
+	do(t, conn, "XADD", "stream_key", "0-2", "bar", "baz")
+	expectReply(t, conn, "$3\r\n0-2\r\n")
+	do(t, conn, "XADD", "stream_key", "0-3", "baz", "foo")
+	expectReply(t, conn, "$3\r\n0-3\r\n")
+
+	// Both ends of the range are included.
+	do(t, conn, "XRANGE", "stream_key", "0-2", "0-3")
+	expectReply(t, conn, array(
+		entryReply("0-2", "bar", "baz"),
+		entryReply("0-3", "baz", "foo"),
+	))
+}
+
+func TestXRangeExactEncoding(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	do(t, conn, "XADD", "some_key", "1526985054069-0", "temperature", "36", "humidity", "95")
+	expectReply(t, conn, "$15\r\n1526985054069-0\r\n")
+	do(t, conn, "XADD", "some_key", "1526985054079-0", "temperature", "37", "humidity", "94")
+	expectReply(t, conn, "$15\r\n1526985054079-0\r\n")
+
+	// An array of entries; each entry is [ID, [field, value, ...]].
+	do(t, conn, "XRANGE", "some_key", "1526985054069", "1526985054079")
+	expectReply(t, conn, ""+
+		"*2\r\n"+
+		"*2\r\n"+
+		"$15\r\n1526985054069-0\r\n"+
+		"*4\r\n"+
+		"$11\r\ntemperature\r\n"+
+		"$2\r\n36\r\n"+
+		"$8\r\nhumidity\r\n"+
+		"$2\r\n95\r\n"+
+		"*2\r\n"+
+		"$15\r\n1526985054079-0\r\n"+
+		"*4\r\n"+
+		"$11\r\ntemperature\r\n"+
+		"$2\r\n37\r\n"+
+		"$8\r\nhumidity\r\n"+
+		"$2\r\n94\r\n")
+}
+
+func TestXRangeBounds(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	ids := []string{"1-0", "1-1", "2-0", "2-5", "3-0", "10-0"}
+	for _, id := range ids {
+		do(t, conn, "XADD", "stream_key", id, "id", id)
+		expectReply(t, conn, bulk(id))
+	}
+
+	tests := []struct {
+		name       string
+		start, end string
+		want       []string
+	}{
+		{"whole stream", "1-0", "10-0", ids},
+		{"range larger than the stream", "0-1", "999-0", ids},
+		{"single entry: start equals end", "2-0", "2-0", []string{"2-0"}},
+		{"first entry only", "1-0", "1-0", []string{"1-0"}},
+		{"last entry only", "10-0", "10-0", []string{"10-0"}},
+		{"bounds that are not entries themselves", "1-5", "2-9", []string{"2-0", "2-5"}},
+		{"start before the first entry", "0-0", "1-1", []string{"1-0", "1-1"}},
+		{"end after the last entry", "3-0", "50-0", []string{"3-0", "10-0"}},
+		{"between two entries", "3-1", "9-0", nil},
+		{"before the first entry", "0-0", "0-5", nil},
+		{"after the last entry", "10-1", "20-0", nil},
+		{"start after end", "3-0", "2-0", nil},
+		{"IDs are compared as numbers", "3-0", "10-0", []string{"3-0", "10-0"}},
+		{"start without sequence number begins at sequence 0", "2", "2-5", []string{"2-0", "2-5"}},
+		{"end without sequence number covers the whole millisecond", "2-0", "2", []string{"2-0", "2-5"}},
+		{"both without sequence number", "1", "2", []string{"1-0", "1-1", "2-0", "2-5"}},
+		{"one millisecond", "1", "1", []string{"1-0", "1-1"}},
+		{"largest possible end", "2-5", "18446744073709551615-18446744073709551615", []string{"2-5", "3-0", "10-0"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entries := make([]string, len(tt.want))
+			for i, id := range tt.want {
+				entries[i] = entryReply(id, "id", id)
+			}
+
+			do(t, conn, "XRANGE", "stream_key", tt.start, tt.end)
+			expectReply(t, conn, array(entries...))
+		})
+	}
+}
+
+func TestXRangeMissingStream(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	do(t, conn, "XRANGE", "missing", "0-1", "5-0")
+	expectReply(t, conn, "*0\r\n")
+
+	// Querying doesn't create the stream.
+	do(t, conn, "TYPE", "missing")
+	expectReply(t, conn, "+none\r\n")
+}
+
+func TestXRangeKeepsFieldsInOrder(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	fields := []string{"z", "1", "a", "2", "m", "3", "a", "4", "", "", "with space", "a\r\nb"}
+	do(t, conn, append([]string{"XADD", "stream_key", "1-1"}, fields...)...)
+	expectReply(t, conn, "$3\r\n1-1\r\n")
+
+	// Fields come back as they were given: not sorted, not deduplicated.
+	do(t, conn, "XRANGE", "stream_key", "1-1", "1-1")
+	expectReply(t, conn, array(entryReply("1-1", fields...)))
+}
+
+func TestXRangeDoesNotModifyTheStream(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	do(t, conn, "XADD", "stream_key", "1-1", "a", "1")
+	expectReply(t, conn, "$3\r\n1-1\r\n")
+	do(t, conn, "XADD", "stream_key", "1-2", "b", "2")
+	expectReply(t, conn, "$3\r\n1-2\r\n")
+
+	want := array(entryReply("1-1", "a", "1"), entryReply("1-2", "b", "2"))
+	for i := 0; i < 3; i++ {
+		do(t, conn, "XRANGE", "stream_key", "1-1", "1-2")
+		expectReply(t, conn, want)
+	}
+
+	// New entries show up in later queries.
+	do(t, conn, "XADD", "stream_key", "1-3", "c", "3")
+	expectReply(t, conn, "$3\r\n1-3\r\n")
+	do(t, conn, "XRANGE", "stream_key", "1-2", "1-3")
+	expectReply(t, conn, array(entryReply("1-2", "b", "2"), entryReply("1-3", "c", "3")))
+}
+
+func TestXRangeWithGeneratedIDs(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	do(t, conn, "XADD", "stream_key", "5-*", "a", "1")
+	expectReply(t, conn, "$3\r\n5-0\r\n")
+	do(t, conn, "XADD", "stream_key", "5-*", "b", "2")
+	expectReply(t, conn, "$3\r\n5-1\r\n")
+	do(t, conn, "XADD", "stream_key", "*", "c", "3")
+	generated := readBulkString(t, conn)
+
+	do(t, conn, "XRANGE", "stream_key", "5", generated)
+	expectReply(t, conn, array(
+		entryReply("5-0", "a", "1"),
+		entryReply("5-1", "b", "2"),
+		entryReply(generated, "c", "3"),
+	))
+}
+
+func TestXRangeInvalidIDs(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	do(t, conn, "XADD", "stream_key", "1-1", "foo", "bar")
+	expectReply(t, conn, "$3\r\n1-1\r\n")
+
+	for _, id := range []string{"abc", "", "1-", "1-2-3", "1.5", "*", "1-*", "18446744073709551616"} {
+		do(t, conn, "XRANGE", "stream_key", id, "5-0")
+		expectReply(t, conn, invalidStreamIDError)
+		do(t, conn, "XRANGE", "stream_key", "0-1", id)
+		expectReply(t, conn, invalidStreamIDError)
+	}
+
+	// IDs are validated even when the stream doesn't exist.
+	do(t, conn, "XRANGE", "missing", "abc", "5-0")
+	expectReply(t, conn, invalidStreamIDError)
+}
+
+func TestXRangeWrongNumberOfArguments(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	const wrongArity = "-ERR wrong number of arguments for 'xrange' command\r\n"
+
+	do(t, conn, "XRANGE")
+	expectReply(t, conn, wrongArity)
+	do(t, conn, "XRANGE", "stream_key")
+	expectReply(t, conn, wrongArity)
+	do(t, conn, "XRANGE", "stream_key", "0-1")
+	expectReply(t, conn, wrongArity)
+}
+
+func TestXRangeAgainstOtherTypesIsWrongType(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	do(t, conn, "SET", "text", "value")
+	expectReply(t, conn, "+OK\r\n")
+	do(t, conn, "RPUSH", "list_key", "element")
+	expectReply(t, conn, ":1\r\n")
+
+	do(t, conn, "XRANGE", "text", "0-1", "5-0")
+	expectReply(t, conn, wrongTypeError)
+	do(t, conn, "XRANGE", "list_key", "0-1", "5-0")
+	expectReply(t, conn, wrongTypeError)
+}
+
+func TestXRangeIsCaseInsensitive(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	do(t, conn, "XADD", "stream_key", "1-1", "foo", "bar")
+	expectReply(t, conn, "$3\r\n1-1\r\n")
+
+	for _, name := range []string{"xrange", "XRange", "xRANGE"} {
+		do(t, conn, name, "stream_key", "1-1", "1-1")
+		expectReply(t, conn, array(entryReply("1-1", "foo", "bar")))
+	}
+}
+
+func TestStreamBetween(t *testing.T) {
+	const maxUint64 = 1<<64 - 1
+
+	st := &stream{}
+	ids := []streamID{{1, 0}, {1, 1}, {2, 0}, {2, 5}, {3, 0}}
+	for _, id := range ids {
+		st.entries = append(st.entries, streamEntry{id: id})
+	}
+
+	idsOf := func(entries []streamEntry) []streamID {
+		var out []streamID
+		for _, e := range entries {
+			out = append(out, e.id)
+		}
+		return out
+	}
+
+	tests := []struct {
+		start, end streamID
+		want       []streamID
+	}{
+		{streamID{0, 0}, streamID{maxUint64, maxUint64}, ids},
+		{streamID{1, 0}, streamID{3, 0}, ids},
+		{streamID{1, 1}, streamID{2, 0}, []streamID{{1, 1}, {2, 0}}},
+		{streamID{2, 0}, streamID{2, 0}, []streamID{{2, 0}}},
+		{streamID{1, 2}, streamID{2, 9}, []streamID{{2, 0}, {2, 5}}},
+		{streamID{2, 1}, streamID{2, 4}, nil},
+		{streamID{0, 0}, streamID{0, maxUint64}, nil},
+		{streamID{3, 1}, streamID{9, 0}, nil},
+		{streamID{3, 0}, streamID{1, 0}, nil},
+	}
+	for _, tt := range tests {
+		if got := idsOf(st.between(tt.start, tt.end)); !reflect.DeepEqual(got, tt.want) {
+			t.Errorf("between(%v, %v) = %v, want %v", tt.start, tt.end, got, tt.want)
+		}
+	}
+
+	if got := (&stream{}).between(streamID{0, 0}, streamID{maxUint64, maxUint64}); len(got) != 0 {
+		t.Errorf("between on an empty stream = %v, want nothing", got)
+	}
+}

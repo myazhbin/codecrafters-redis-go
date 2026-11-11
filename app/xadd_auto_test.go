@@ -109,7 +109,7 @@ func TestXAddAutoIDsAlwaysIncrease(t *testing.T) {
 	last := streamID{}
 	for i := 0; i < 200; i++ {
 		do(t, conn, "XADD", "stream_key", "*", "n", strconv.Itoa(i))
-		id, err := parseStreamID(readBulkString(t, conn))
+		id, err := parseStreamID(readBulkString(t, conn), 0)
 		if err != nil {
 			t.Fatalf("entry %d: generated ID is not a valid ID: %v", i, err)
 		}
