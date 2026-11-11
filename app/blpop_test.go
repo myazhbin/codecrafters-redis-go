@@ -41,6 +41,8 @@ func TestBLPopReturnsAvailableElementImmediately(t *testing.T) {
 }
 
 func TestBLPopBlocksUntilAnElementIsPushed(t *testing.T) {
+	t.Parallel()
+
 	srv := NewServer()
 	addr := startServer(t, srv)
 	blocked := dial(t, addr)
@@ -79,6 +81,8 @@ func TestBLPopIsUnblockedByLPush(t *testing.T) {
 }
 
 func TestBLPopServesTheLongestWaitingClientFirst(t *testing.T) {
+	t.Parallel()
+
 	srv := NewServer()
 	addr := startServer(t, srv)
 	first := dial(t, addr)
@@ -166,6 +170,8 @@ func TestBLPopClientCanBlockAgain(t *testing.T) {
 }
 
 func TestBLPopDoesNotBlockOtherClients(t *testing.T) {
+	t.Parallel()
+
 	srv := NewServer()
 	addr := startServer(t, srv)
 	blocked := dial(t, addr)
@@ -281,6 +287,189 @@ func TestBLPopElementStaysInListWhenTheOnlyWaiterLeft(t *testing.T) {
 	expectReply(t, pusher, ":1\r\n")
 	do(t, pusher, "LRANGE", "list_key", "0", "-1")
 	expectReply(t, pusher, bulkArray("foo"))
+}
+
+func TestBLPopTimesOut(t *testing.T) {
+	t.Parallel()
+
+	srv := NewServer()
+	addr := startServer(t, srv)
+	conn := dial(t, addr)
+
+	start := time.Now()
+	do(t, conn, "BLPOP", "list_key", "0.1")
+
+	// Nothing comes back while the timeout is running...
+	expectNoReply(t, conn, 50*time.Millisecond)
+
+	// ...then the reply is a null array.
+	expectReply(t, conn, "*-1\r\n")
+	if elapsed := time.Since(start); elapsed < 100*time.Millisecond {
+		t.Fatalf("BLPOP timed out after %v, before its 100ms timeout", elapsed)
+	}
+
+	// The client isn't waiting anymore: a later push stays in the list.
+	waitForBlockedClients(t, srv, "list_key", 0)
+	do(t, conn, "RPUSH", "list_key", "late")
+	expectReply(t, conn, ":1\r\n")
+	do(t, conn, "LRANGE", "list_key", "0", "-1")
+	expectReply(t, conn, bulkArray("late"))
+}
+
+func TestBLPopWithTimeoutReturnsElementPushedInTime(t *testing.T) {
+	t.Parallel()
+
+	srv := NewServer()
+	addr := startServer(t, srv)
+	blocked := dial(t, addr)
+	pusher := dial(t, addr)
+
+	do(t, blocked, "BLPOP", "list_key", "0.3")
+	waitForBlockedClients(t, srv, "list_key", 1)
+
+	do(t, pusher, "RPUSH", "list_key", "foo")
+	expectReply(t, pusher, ":1\r\n")
+	expectReply(t, blocked, bulkArray("list_key", "foo"))
+
+	// The timeout was cancelled: no null array follows once it has elapsed.
+	expectNoReply(t, blocked, 400*time.Millisecond)
+	do(t, blocked, "PING")
+	expectReply(t, blocked, "+PONG\r\n")
+}
+
+func TestBLPopWithTimeoutReturnsAvailableElementImmediately(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	do(t, conn, "RPUSH", "list_key", "ready")
+	expectReply(t, conn, ":1\r\n")
+
+	start := time.Now()
+	do(t, conn, "BLPOP", "list_key", "5")
+	expectReply(t, conn, bulkArray("list_key", "ready"))
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("BLPOP took %v although an element was available", elapsed)
+	}
+}
+
+func TestBLPopTimeoutIsInSeconds(t *testing.T) {
+	t.Parallel()
+
+	srv := NewServer()
+	addr := startServer(t, srv)
+	blocked := dial(t, addr)
+	pusher := dial(t, addr)
+
+	// "1" is one second, not one millisecond: after 150ms the client must
+	// still be waiting.
+	do(t, blocked, "BLPOP", "list_key", "1")
+	expectNoReply(t, blocked, 150*time.Millisecond)
+	waitForBlockedClients(t, srv, "list_key", 1)
+
+	do(t, pusher, "RPUSH", "list_key", "foo")
+	expectReply(t, pusher, ":1\r\n")
+	expectReply(t, blocked, bulkArray("list_key", "foo"))
+}
+
+func TestBLPopTimeoutFormats(t *testing.T) {
+	// All of these are valid ways to write a short timeout.
+	for _, timeout := range []string{"0.05", ".05", "5e-2", "0.050", "+0.05"} {
+		t.Run(timeout, func(t *testing.T) {
+			conn := dial(t, startTestServer(t))
+
+			do(t, conn, "BLPOP", "list_key", timeout)
+			expectReply(t, conn, "*-1\r\n")
+		})
+	}
+}
+
+func TestBLPopClientIsUsableAfterTimeout(t *testing.T) {
+	t.Parallel()
+
+	srv := NewServer()
+	addr := startServer(t, srv)
+	conn := dial(t, addr)
+	pusher := dial(t, addr)
+
+	do(t, conn, "BLPOP", "list_key", "0.05")
+	expectReply(t, conn, "*-1\r\n")
+
+	do(t, conn, "PING")
+	expectReply(t, conn, "+PONG\r\n")
+
+	// It can block again, and be served this time.
+	do(t, conn, "BLPOP", "list_key", "2")
+	waitForBlockedClients(t, srv, "list_key", 1)
+	do(t, pusher, "RPUSH", "list_key", "foo")
+	expectReply(t, pusher, ":1\r\n")
+	expectReply(t, conn, bulkArray("list_key", "foo"))
+}
+
+func TestBLPopTimedOutClientLosesItsTurn(t *testing.T) {
+	t.Parallel()
+
+	srv := NewServer()
+	addr := startServer(t, srv)
+	impatient := dial(t, addr)
+	patient := dial(t, addr)
+	pusher := dial(t, addr)
+
+	// The impatient client is first in line, but gives up after 50ms.
+	do(t, impatient, "BLPOP", "list_key", "0.05")
+	waitForBlockedClients(t, srv, "list_key", 1)
+	do(t, patient, "BLPOP", "list_key", "0")
+	waitForBlockedClients(t, srv, "list_key", 2)
+
+	expectReply(t, impatient, "*-1\r\n")
+	waitForBlockedClients(t, srv, "list_key", 1)
+
+	// The element goes to the client that is still waiting.
+	do(t, pusher, "RPUSH", "list_key", "foo")
+	expectReply(t, pusher, ":1\r\n")
+	expectReply(t, patient, bulkArray("list_key", "foo"))
+	expectNoReply(t, impatient, blockedWait)
+}
+
+func TestBLPopTimeoutWithSeveralKeys(t *testing.T) {
+	t.Parallel()
+
+	srv := NewServer()
+	addr := startServer(t, srv)
+	conn := dial(t, addr)
+
+	do(t, conn, "BLPOP", "first", "second", "0.05")
+	expectReply(t, conn, "*-1\r\n")
+
+	// The client was removed from the queue of every key.
+	waitForBlockedClients(t, srv, "first", 0)
+	waitForBlockedClients(t, srv, "second", 0)
+}
+
+func TestBLPopEachClientHasItsOwnTimeout(t *testing.T) {
+	t.Parallel()
+
+	addr := startTestServer(t)
+	short := dial(t, addr)
+	long := dial(t, addr)
+
+	do(t, long, "BLPOP", "list_key", "0.4")
+	do(t, short, "BLPOP", "list_key", "0.05")
+
+	// The short timeout fires while the long one is still running.
+	expectReply(t, short, "*-1\r\n")
+	expectNoReply(t, long, blockedWait)
+	expectReply(t, long, "*-1\r\n")
+}
+
+func TestBLPopTimeoutOutOfRange(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	do(t, conn, "BLPOP", "list_key", "1e300")
+	expectReply(t, conn, "-ERR timeout is out of range\r\n")
+	do(t, conn, "BLPOP", "list_key", "99999999999999999999")
+	expectReply(t, conn, "-ERR timeout is out of range\r\n")
+
+	do(t, conn, "PING")
+	expectReply(t, conn, "+PONG\r\n")
 }
 
 func TestBLPopInvalidArguments(t *testing.T) {

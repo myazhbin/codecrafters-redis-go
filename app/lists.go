@@ -3,6 +3,7 @@ package main
 import (
 	"math"
 	"strconv"
+	"time"
 )
 
 // This file implements lists and the commands that operate on them.
@@ -235,6 +236,10 @@ func cmdLPop(c *client, args []string) []byte {
 	return bulkStringArray(popped)
 }
 
+// maxBlockingTimeout is the longest timeout, in seconds, a blocking command
+// accepts: anything above doesn't fit in a time.Duration.
+const maxBlockingTimeout = float64(math.MaxInt64 / int64(time.Second))
+
 // cmdBLPop implements BLPOP key [key ...] timeout: it removes the first
 // element of the first of the given lists that has one, and replies with an
 // array holding the key of that list and the element.
@@ -243,7 +248,9 @@ func cmdLPop(c *client, args []string) []byte {
 // pushes an element to one of them. When several clients are blocked on the
 // same list, the one that has been waiting the longest is served first.
 //
-// A timeout of 0 means "wait for as long as it takes".
+// timeout is the maximum number of seconds to wait, and can have a fractional
+// part. If no element shows up in time the reply is a null array. A timeout
+// of 0 means "wait for as long as it takes".
 func cmdBLPop(c *client, args []string) []byte {
 	s := c.server
 	keys, rawTimeout := args[:len(args)-1], args[len(args)-1]
@@ -254,6 +261,9 @@ func cmdBLPop(c *client, args []string) []byte {
 	}
 	if timeout < 0 {
 		return errorReply("ERR timeout is negative")
+	}
+	if timeout > maxBlockingTimeout {
+		return errorReply("ERR timeout is out of range")
 	}
 
 	// If one of the lists already has an element there's no need to wait.
@@ -267,38 +277,59 @@ func cmdBLPop(c *client, args []string) []byte {
 		}
 	}
 
+	// A nil channel is never ready: without timeout the wait has no deadline.
+	var expired <-chan time.Time
+	if timeout > 0 {
+		timer := time.NewTimer(time.Duration(timeout * float64(time.Second)))
+		defer timer.Stop()
+		expired = timer.C
+	}
+
 	// Wait for an element without holding the lock, so that other clients
 	// get a chance to push one.
 	w := s.addListWaiter(keys)
 	s.mu.Unlock()
 	var (
-		popped poppedElement
-		served bool
+		popped       poppedElement
+		served       bool
+		disconnected bool
 	)
 	select {
 	case popped = <-w.served:
 		served = true
+	case <-expired:
 	case <-c.ctx.Done():
+		disconnected = true
 	}
 	s.mu.Lock()
 
-	if served {
-		return bulkStringArray([]string{popped.key, popped.element})
+	if !served {
+		// The wait was given up, but an element may still have been handed
+		// over before the lock was taken back.
+		select {
+		case popped = <-w.served:
+			served = true
+		default:
+			s.removeListWaiter(w)
+		}
 	}
 
-	// The client disconnected while it was waiting. An element may still have
-	// been handed over to it before the lock was taken back; since nobody is
-	// there to receive it anymore, it goes back to the head of its list.
-	select {
-	case popped = <-w.served:
+	switch {
+	case served && disconnected:
+		// Nobody is there to receive the element anymore: it goes back to
+		// the head of its list, for the next client.
 		if l, err := s.store.getOrCreateList(popped.key); err == nil {
 			l.pushFront(popped.element)
 			s.serveListWaiters(popped.key)
 		}
+		return nil
+	case served:
+		return bulkStringArray([]string{popped.key, popped.element})
+	case disconnected:
+		return nil
 	default:
-		s.removeListWaiter(w)
+		return nullArray // timed out
 	}
-	return nil
 }
 
 // cmdLLen implements LLEN key: it replies with the number of elements of the
