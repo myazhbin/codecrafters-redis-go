@@ -50,3 +50,12 @@ func cmdDiscard(c *client, args []string) []byte {
 	c.queued = nil
 	return simpleString("OK")
 }
+
+// cmdWatch implements WATCH key [key ...]: it asks the server to monitor the
+// keys for changes, so that a later transaction can be made conditional on
+// them not having been modified (optimistic locking).
+//
+// The keys aren't tracked yet: the command is accepted and acknowledged.
+func cmdWatch(c *client, args []string) []byte {
+	return simpleString("OK")
+}

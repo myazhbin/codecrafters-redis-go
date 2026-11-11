@@ -50,6 +50,7 @@ var commands = map[string]command{
 	"MULTI":   {arity: 1, handler: cmdMulti, immediate: true},
 	"EXEC":    {arity: 1, handler: cmdExec, immediate: true},
 	"DISCARD": {arity: 1, handler: cmdDiscard, immediate: true},
+	"WATCH":   {arity: -2, handler: cmdWatch},
 }
 
 // execute runs a single command sent by the client and returns the reply to
