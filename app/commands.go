@@ -164,15 +164,27 @@ func parseIndex(s string) (int, bool) {
 }
 
 // cmdPing implements PING [message]: it replies PONG, or echoes the message.
+//
+// A client in subscribed mode gets an array instead, made of "pong" and the
+// message, which is empty if there is none. Everything such a client receives
+// is an array that starts with the kind of thing it is, as what is published
+// to its channels can arrive at any time: that's how it tells them apart.
 func cmdPing(c *client, args []string) []byte {
-	switch len(args) {
-	case 0:
-		return simpleString("PONG")
-	case 1:
-		return bulkString(args[0])
-	default:
+	if len(args) > 1 {
 		return wrongArgumentCountError("PING")
 	}
+
+	if c.inSubscribedMode() {
+		message := ""
+		if len(args) == 1 {
+			message = args[0]
+		}
+		return bulkStringArray([]string{"pong", message})
+	}
+	if len(args) == 1 {
+		return bulkString(args[0])
+	}
+	return simpleString("PONG")
 }
 
 // cmdEcho implements ECHO message: it replies with the message itself.
