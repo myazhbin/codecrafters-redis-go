@@ -139,3 +139,36 @@ func roundTrip(w io.Writer, r *bufio.Reader, command ...string) (string, error) 
 func encodeCommandArray(args ...string) []byte {
 	return bulkStringArray(args)
 }
+
+// cmdReplconf implements REPLCONF option value [option value ...], which a
+// replica sends during the handshake to tell its master about itself:
+//
+//   - "listening-port <port>" is the port the replica serves its clients on.
+//   - "capa <capability>" names a feature of the replication protocol the
+//     replica supports. Capabilities the master doesn't know are ignored.
+//
+// Option names are case-insensitive.
+func cmdReplconf(c *client, args []string) []byte {
+	if len(args)%2 != 0 {
+		return errorReply("ERR syntax error")
+	}
+
+	// Nothing is applied before every option is known to be valid.
+	listeningPort := c.listeningPort
+	for i := 0; i < len(args); i += 2 {
+		option, value := args[i], args[i+1]
+		switch strings.ToLower(option) {
+		case "listening-port":
+			port, ok := parseInt(value)
+			if !ok || port < 0 || port > 65535 {
+				return errorReply(errNotAnInteger)
+			}
+			listeningPort = int(port)
+		case "capa":
+		default:
+			return errorReply("ERR Unrecognized REPLCONF option: " + option)
+		}
+	}
+	c.listeningPort = listeningPort
+	return simpleString("OK")
+}

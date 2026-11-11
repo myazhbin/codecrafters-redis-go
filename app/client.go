@@ -32,6 +32,9 @@ type client struct {
 	// client started watching it. The client's next transaction is then
 	// aborted instead of being executed.
 	dirty bool
+	// listeningPort is the port a replica said it serves its own clients on,
+	// with REPLCONF listening-port. It is 0 for clients that didn't say.
+	listeningPort int
 	// executing is set while EXEC runs the queued commands. Commands that
 	// would otherwise block must not do so then: a transaction runs from
 	// start to finish without letting any other client in.

@@ -48,6 +48,8 @@ var commands = map[string]command{
 	"XRANGE": {arity: 4, handler: cmdXRange},
 	"XREAD":  {arity: -4, handler: cmdXRead},
 
+	"REPLCONF": {arity: -1, handler: cmdReplconf},
+
 	"MULTI":   {arity: 1, handler: cmdMulti, immediate: true},
 	"EXEC":    {arity: 1, handler: cmdExec, immediate: true},
 	"DISCARD": {arity: 1, handler: cmdDiscard, immediate: true},
