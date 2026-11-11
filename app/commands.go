@@ -4,6 +4,9 @@ import "strings"
 
 // handler runs a command and returns its RESP-encoded reply. args holds the
 // command's arguments, without the command name.
+//
+// Handlers are called with the server's lock held, so they can freely use the
+// server's state and each command is atomic with respect to the others.
 type handler func(s *Server, args []string) []byte
 
 // command describes a command the server knows about.
@@ -18,6 +21,8 @@ type command struct {
 var commands = map[string]command{
 	"PING": {arity: -1, handler: cmdPing},
 	"ECHO": {arity: 2, handler: cmdEcho},
+	"SET":  {arity: -3, handler: cmdSet},
+	"GET":  {arity: 2, handler: cmdGet},
 }
 
 // execute runs a single client command and returns the reply to send back.
@@ -32,6 +37,9 @@ func (s *Server) execute(args []string) []byte {
 	if (cmd.arity > 0 && len(args) != cmd.arity) || (cmd.arity < 0 && len(args) < -cmd.arity) {
 		return wrongArgumentCountError(name)
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return cmd.handler(s, args[1:])
 }
 

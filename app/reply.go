@@ -24,3 +24,7 @@ func bulkString(s string) []byte {
 	b = append(b, s...)
 	return append(b, '\r', '\n')
 }
+
+// nullBulkString is the reply for a string that doesn't exist. It is distinct
+// from the empty string, which is encoded as "$0\r\n\r\n".
+var nullBulkString = []byte("$-1\r\n")

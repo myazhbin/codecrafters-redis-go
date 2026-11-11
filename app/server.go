@@ -5,14 +5,21 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync"
 )
 
 // Server is a Redis-compatible server that can talk to many clients at once.
-type Server struct{}
+type Server struct {
+	// mu guards the fields below. Every command holds it for its whole
+	// execution, so commands run one at a time even though each client is
+	// served by its own goroutine.
+	mu    sync.Mutex
+	store *store
+}
 
-// NewServer returns a server that is ready to Serve.
+// NewServer returns a server with an empty keyspace that is ready to Serve.
 func NewServer() *Server {
-	return &Server{}
+	return &Server{store: newStore()}
 }
 
 // Serve accepts connections on l and serves each client on its own goroutine,
