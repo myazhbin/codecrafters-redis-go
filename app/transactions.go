@@ -51,7 +51,7 @@ func cmdExec(c *client, args []string) []byte {
 
 // cmdDiscard implements DISCARD: it aborts the transaction started by MULTI,
 // dropping the queued commands without executing any of them. The connection
-// is back to normal afterwards. It is an error to call it outside of a
+// is back to normal afterwards, and no longer watches any key. It is an error to call it outside of a
 // transaction.
 func cmdDiscard(c *client, args []string) []byte {
 	if !c.inTransaction {
@@ -59,6 +59,8 @@ func cmdDiscard(c *client, args []string) []byte {
 	}
 	c.inTransaction = false
 	c.queued = nil
+	// Like EXEC, DISCARD ends the watch along with the transaction.
+	c.unwatch()
 	return simpleString("OK")
 }
 
