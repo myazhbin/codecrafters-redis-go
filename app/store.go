@@ -57,6 +57,9 @@ type store struct {
 	// now returns the current time. It's a field so that tests can control
 	// the clock instead of sleeping.
 	now func() time.Time
+	// onModify, if set, is called with the key every time a key is modified:
+	// when its value is set, changed in place or deleted, expiry included.
+	onModify func(key string)
 }
 
 func newStore() *store {
@@ -75,15 +78,29 @@ func (st *store) lookup(key string) (entry, bool) {
 	}
 	if e.expired(st.now()) {
 		delete(st.entries, key)
+		st.modified(key)
 		return entry{}, false
 	}
 	return e, true
 }
 
+// modified reports that key was modified to whoever asked to be told. The
+// store calls it itself when it sets or deletes a key; code that changes a
+// value in place, such as a push to an existing list, has to call it.
+func (st *store) modified(key string) {
+	if st.onModify != nil {
+		st.onModify(key)
+	}
+}
+
 // delete removes key from the keyspace. Deleting a key that doesn't exist is
 // a no-op.
 func (st *store) delete(key string) {
+	if _, ok := st.entries[key]; !ok {
+		return
+	}
 	delete(st.entries, key)
+	st.modified(key)
 }
 
 // valueAt returns the value stored at key if it is of type T, and whether the
@@ -113,6 +130,7 @@ func (st *store) getString(key string) (string, bool, error) {
 // for a key that never expires.
 func (st *store) setString(key, value string, expiresAt time.Time) {
 	st.entries[key] = entry{value: value, expiresAt: expiresAt}
+	st.modified(key)
 }
 
 // getList returns the list stored at key, or nil if the key doesn't exist. It
@@ -151,4 +169,5 @@ func (st *store) getStream(key string) (*stream, error) {
 // setStream stores a stream at key, replacing any previous value.
 func (st *store) setStream(key string, value *stream) {
 	st.entries[key] = entry{value: value}
+	st.modified(key)
 }

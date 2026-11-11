@@ -28,6 +28,10 @@ type client struct {
 	queued []queuedCommand
 	// watched is the set of keys the client asked to monitor with WATCH.
 	watched map[string]struct{}
+	// dirty is set when one of the watched keys has been modified since the
+	// client started watching it. The client's next transaction is then
+	// aborted instead of being executed.
+	dirty bool
 	// executing is set while EXEC runs the queued commands. Commands that
 	// would otherwise block must not do so then: a transaction runs from
 	// start to finish without letting any other client in.
@@ -56,6 +60,12 @@ func (s *Server) handleConnection(conn net.Conn) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	c := &client{server: s, conn: conn, ctx: ctx}
+	defer func() {
+		// A client that is gone must not stay registered as a watcher.
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		c.unwatch()
+	}()
 
 	for req := range c.readRequests(cancel) {
 		if req.err != nil {

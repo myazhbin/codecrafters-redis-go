@@ -78,6 +78,8 @@ func (s *Server) popFromList(key string, l *list) string {
 	element := l.popFront(1)[0]
 	if len(l.items) == 0 {
 		s.store.delete(key)
+	} else {
+		s.store.modified(key)
 	}
 	return element
 }
@@ -155,6 +157,7 @@ func pushCommand(c *client, args []string, push func(l *list, elements ...string
 		return errorReply(err.Error())
 	}
 	push(l, args[1:]...)
+	s.store.modified(key)
 
 	// The reply is the length of the list right after the push, even if some
 	// of the new elements are immediately taken by blocked clients.
@@ -203,6 +206,8 @@ func cmdLPop(c *client, args []string) []byte {
 	popped := l.popFront(count)
 	if len(l.items) == 0 {
 		s.store.delete(key)
+	} else if len(popped) > 0 {
+		s.store.modified(key)
 	}
 	return bulkStringArray(popped)
 }

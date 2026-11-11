@@ -19,15 +19,21 @@ type Server struct {
 	// streamWaiters holds the clients blocked until an entry is added to a
 	// stream, by stream key.
 	streamWaiters waitQueues[*streamWaiter]
+	// watchers holds the clients watching a key with WATCH, by key. Keys
+	// nobody watches have no entry.
+	watchers map[string]map[*client]struct{}
 }
 
 // NewServer returns a server with an empty keyspace that is ready to Serve.
 func NewServer() *Server {
-	return &Server{
+	s := &Server{
 		store:         newStore(),
 		listWaiters:   make(waitQueues[*listWaiter]),
 		streamWaiters: make(waitQueues[*streamWaiter]),
+		watchers:      make(map[string]map[*client]struct{}),
 	}
+	s.store.onModify = s.keyModified
+	return s
 }
 
 // Serve accepts connections on l and serves each client on its own goroutine,

@@ -273,6 +273,8 @@ func cmdXAdd(c *client, args []string) []byte {
 	}
 	if created {
 		store.setStream(key, st)
+	} else {
+		store.modified(key)
 	}
 	c.server.wakeStreamWaiters(key)
 	return bulkString(id.String())
