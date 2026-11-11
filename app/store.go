@@ -13,37 +13,6 @@ var noExpiry time.Time
 // a list. Its message is the error clients receive.
 var errWrongType = errors.New("WRONGTYPE Operation against a key holding the wrong kind of value")
 
-// list is the value of a list key: an ordered sequence of strings.
-type list struct {
-	items []string
-}
-
-// slice returns the elements of the list from index start to index stop,
-// both included.
-//
-// Indexes start at 0. Negative indexes count from the end of the list: -1 is
-// the last element, -2 the one before, and so on. Indexes that fall outside
-// of the list are brought back to its closest end, and a range that covers no
-// element (such as one starting after its own stop) is empty.
-//
-// The result shares its memory with the list and must not be modified.
-func (l *list) slice(start, stop int) []string {
-	n := len(l.items)
-	if start < 0 {
-		start = max(start+n, 0)
-	}
-	if stop < 0 {
-		stop += n
-	}
-	if stop >= n {
-		stop = n - 1
-	}
-	if start > stop {
-		return nil
-	}
-	return l.items[start : stop+1]
-}
-
 // entry is what the keyspace stores for a key.
 type entry struct {
 	// value is the key's value. Its dynamic type is the type of the key:
