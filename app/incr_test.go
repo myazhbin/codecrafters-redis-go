@@ -312,6 +312,127 @@ func TestIncrMissingKeyIsAtomic(t *testing.T) {
 	}
 }
 
+const notAnIntegerError = "-ERR value is not an integer or out of range\r\n"
+
+func TestIncrNonNumericValue(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	do(t, conn, "SET", "foo", "xyz")
+	expectReply(t, conn, "+OK\r\n")
+	do(t, conn, "INCR", "foo")
+	expectReply(t, conn, notAnIntegerError)
+
+	// The value is left as it was.
+	do(t, conn, "GET", "foo")
+	expectReply(t, conn, "$3\r\nxyz\r\n")
+}
+
+func TestIncrValuesThatAreNotIntegers(t *testing.T) {
+	values := []struct {
+		name, value string
+	}{
+		{"text", "xyz"},
+		{"empty string", ""},
+		{"decimal number", "3.14"},
+		{"integer written as a decimal", "5.0"},
+		{"scientific notation", "1e3"},
+		{"hexadecimal", "0x10"},
+		{"number followed by text", "12abc"},
+		{"text followed by a number", "abc12"},
+		{"leading space", " 5"},
+		{"trailing space", "5 "},
+		{"trailing newline", "5\n"},
+		{"explicit plus sign", "+5"},
+		{"leading zeros", "005"},
+		{"minus zero", "-0"},
+		{"lone minus sign", "-"},
+		{"one above the largest 64-bit integer", "9223372036854775808"},
+		{"one below the smallest 64-bit integer", "-9223372036854775809"},
+		{"far too large", "99999999999999999999999999"},
+		{"thousands separators", "1,000"},
+		{"binary data", "\x00\x01"},
+	}
+
+	for _, tt := range values {
+		t.Run(tt.name, func(t *testing.T) {
+			conn := dial(t, startTestServer(t))
+
+			do(t, conn, "SET", "foo", tt.value)
+			expectReply(t, conn, "+OK\r\n")
+			do(t, conn, "INCR", "foo")
+			expectReply(t, conn, notAnIntegerError)
+			do(t, conn, "GET", "foo")
+			expectReply(t, conn, bulk(tt.value))
+		})
+	}
+}
+
+func TestIncrNonNumericValueKeepsExpiry(t *testing.T) {
+	addr, clock := startTestServerWithClock(t)
+	conn := dial(t, addr)
+
+	do(t, conn, "SET", "foo", "xyz", "PX", "100")
+	expectReply(t, conn, "+OK\r\n")
+	do(t, conn, "INCR", "foo")
+	expectReply(t, conn, notAnIntegerError)
+
+	// A failed INCR changes nothing, the expiry included.
+	clock.Advance(99 * time.Millisecond)
+	do(t, conn, "GET", "foo")
+	expectReply(t, conn, "$3\r\nxyz\r\n")
+	clock.Advance(1 * time.Millisecond)
+	do(t, conn, "GET", "foo")
+	expectReply(t, conn, "$-1\r\n")
+}
+
+func TestIncrWorksAgainOnceTheValueIsNumeric(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	do(t, conn, "SET", "foo", "xyz")
+	expectReply(t, conn, "+OK\r\n")
+	do(t, conn, "INCR", "foo")
+	expectReply(t, conn, notAnIntegerError)
+
+	do(t, conn, "SET", "foo", "10")
+	expectReply(t, conn, "+OK\r\n")
+	do(t, conn, "INCR", "foo")
+	expectReply(t, conn, ":11\r\n")
+}
+
+func TestIncrAgainstOtherTypesIsWrongType(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	do(t, conn, "RPUSH", "list_key", "1")
+	expectReply(t, conn, ":1\r\n")
+	do(t, conn, "XADD", "stream_key", "1-1", "n", "1")
+	expectReply(t, conn, "$3\r\n1-1\r\n")
+
+	// Not being a string at all is a different error from not being numeric.
+	do(t, conn, "INCR", "list_key")
+	expectReply(t, conn, wrongTypeError)
+	do(t, conn, "INCR", "stream_key")
+	expectReply(t, conn, wrongTypeError)
+
+	do(t, conn, "LRANGE", "list_key", "0", "-1")
+	expectReply(t, conn, bulkArray("1"))
+}
+
+func TestIncrErrorDoesNotAffectOtherKeys(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	do(t, conn, "SET", "text", "xyz")
+	expectReply(t, conn, "+OK\r\n")
+	do(t, conn, "SET", "number", "1")
+	expectReply(t, conn, "+OK\r\n")
+
+	do(t, conn, "INCR", "text")
+	expectReply(t, conn, notAnIntegerError)
+	do(t, conn, "INCR", "number")
+	expectReply(t, conn, ":2\r\n")
+	do(t, conn, "INCR", "missing")
+	expectReply(t, conn, ":1\r\n")
+}
+
 func TestIncrWrongNumberOfArguments(t *testing.T) {
 	conn := dial(t, startTestServer(t))
 
