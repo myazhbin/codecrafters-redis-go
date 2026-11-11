@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"testing"
+	"time"
 )
 
 const (
@@ -178,19 +179,19 @@ func TestStreamAdd(t *testing.T) {
 	explicit := func(ms, seq uint64) newEntryID { return newEntryID{id: streamID{ms, seq}} }
 
 	// An empty stream's last ID is 0-0, so 0-0 itself is too small.
-	if _, err := st.add(explicit(0, 0), nil); !errors.Is(err, errStreamIDTooSmall) {
+	if _, err := st.add(explicit(0, 0), nil, time.Time{}); !errors.Is(err, errStreamIDTooSmall) {
 		t.Fatalf("add(0-0) on an empty stream: err = %v, want errStreamIDTooSmall", err)
 	}
-	if id, err := st.add(explicit(1, 1), []string{"a", "1"}); err != nil || id != (streamID{1, 1}) {
+	if id, err := st.add(explicit(1, 1), []string{"a", "1"}, time.Time{}); err != nil || id != (streamID{1, 1}) {
 		t.Fatalf("add(1-1) = (%v, %v), want (1-1, nil)", id, err)
 	}
-	if _, err := st.add(explicit(1, 1), nil); !errors.Is(err, errStreamIDTooSmall) {
+	if _, err := st.add(explicit(1, 1), nil, time.Time{}); !errors.Is(err, errStreamIDTooSmall) {
 		t.Fatalf("add(1-1) twice: err = %v, want errStreamIDTooSmall", err)
 	}
-	if _, err := st.add(explicit(0, 9), nil); !errors.Is(err, errStreamIDTooSmall) {
+	if _, err := st.add(explicit(0, 9), nil, time.Time{}); !errors.Is(err, errStreamIDTooSmall) {
 		t.Fatalf("add(0-9) after 1-1: err = %v, want errStreamIDTooSmall", err)
 	}
-	if id, err := st.add(explicit(2, 0), []string{"b", "2"}); err != nil || id != (streamID{2, 0}) {
+	if id, err := st.add(explicit(2, 0), []string{"b", "2"}, time.Time{}); err != nil || id != (streamID{2, 0}) {
 		t.Fatalf("add(2-0) = (%v, %v), want (2-0, nil)", id, err)
 	}
 

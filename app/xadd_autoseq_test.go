@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strconv"
 	"testing"
+	"time"
 )
 
 func TestXAddAutoSequenceNumber(t *testing.T) {
@@ -199,13 +200,13 @@ func TestStreamAddAutoSequenceNumber(t *testing.T) {
 		{auto(7), streamID{7, 0}},
 	}
 	for i, step := range steps {
-		got, err := st.add(step.spec, nil)
+		got, err := st.add(step.spec, nil, time.Time{})
 		if err != nil || got != step.want {
 			t.Fatalf("step %d: add(%+v) = (%v, %v), want (%v, nil)", i, step.spec, got, err, step.want)
 		}
 	}
 
-	if _, err := st.add(auto(6), nil); !errors.Is(err, errStreamIDTooSmall) {
+	if _, err := st.add(auto(6), nil, time.Time{}); !errors.Is(err, errStreamIDTooSmall) {
 		t.Fatalf("add(6-*) after 7-0: err = %v, want errStreamIDTooSmall", err)
 	}
 	if len(st.entries) != len(steps) {

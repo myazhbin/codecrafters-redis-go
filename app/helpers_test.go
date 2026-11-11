@@ -193,3 +193,44 @@ func bulkArray(items ...string) string {
 	}
 	return b.String()
 }
+
+// readReplyLine reads from conn up to and including the next CRLF, and
+// returns the line without it.
+func readReplyLine(t *testing.T, conn net.Conn) string {
+	t.Helper()
+
+	conn.SetReadDeadline(time.Now().Add(replyTimeout))
+	var line []byte
+	buf := make([]byte, 1)
+	for !strings.HasSuffix(string(line), "\r\n") {
+		if _, err := io.ReadFull(conn, buf); err != nil {
+			t.Fatalf("reading a line: %v (got %q so far)", err, line)
+		}
+		line = append(line, buf[0])
+	}
+	return string(line[:len(line)-2])
+}
+
+// readBulkString reads a bulk string reply and returns its content.
+func readBulkString(t *testing.T, conn net.Conn) string {
+	t.Helper()
+
+	header := readReplyLine(t, conn)
+	if !strings.HasPrefix(header, "$") {
+		t.Fatalf("reply starts with %q, want a bulk string", header)
+	}
+	length, err := strconv.Atoi(header[1:])
+	if err != nil || length < 0 {
+		t.Fatalf("invalid bulk string header %q", header)
+	}
+
+	conn.SetReadDeadline(time.Now().Add(replyTimeout))
+	payload := make([]byte, length+2)
+	if _, err := io.ReadFull(conn, payload); err != nil {
+		t.Fatalf("reading a bulk string of %d bytes: %v", length, err)
+	}
+	if string(payload[length:]) != "\r\n" {
+		t.Fatalf("bulk string is not terminated by CRLF: %q", payload)
+	}
+	return string(payload[:length])
+}
