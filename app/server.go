@@ -34,6 +34,14 @@ type Server struct {
 	// streamWaiters holds the clients blocked until an entry is added to a
 	// stream, by stream key.
 	streamWaiters waitQueues[*streamWaiter]
+	// replicas holds the clients that are replicas of this server: the ones
+	// that completed the handshake with PSYNC.
+	replicas map[*client]struct{}
+	// batching is set while the commands to propagate are held back in batch
+	// instead of being sent to the replicas, which happens for the duration
+	// of a transaction.
+	batching bool
+	batch    [][]string
 	// watchers holds the clients watching a key with WATCH, by key. Keys
 	// nobody watches have no entry.
 	watchers map[string]map[*client]struct{}
@@ -55,6 +63,7 @@ func NewServerWithConfig(cfg config) *Server {
 		listWaiters:   make(waitQueues[*listWaiter]),
 		streamWaiters: make(waitQueues[*streamWaiter]),
 		watchers:      make(map[string]map[*client]struct{}),
+		replicas:      make(map[*client]struct{}),
 	}
 	s.store.onModify = s.keyModified
 	return s

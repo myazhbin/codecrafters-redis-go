@@ -42,6 +42,10 @@ func cmdExec(c *client, args []string) []byte {
 	c.executing = true
 	defer func() { c.executing = false }()
 
+	// Replicas execute the transaction as one block too.
+	c.server.beginPropagationBatch()
+	defer c.server.endPropagationBatch()
+
 	replies := make([][]byte, len(queued))
 	for i, q := range queued {
 		replies[i] = q.cmd.handler(c, q.args)

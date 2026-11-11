@@ -9,6 +9,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -187,10 +188,157 @@ func cmdPsync(c *client, args []string) []byte {
 	if _, ok := parseInt(args[1]); !ok {
 		return errorReply(errNotAnInteger)
 	}
+	if c.executing {
+		return errorReply("ERR PSYNC is not allowed in a transaction")
+	}
 	s := c.server
 
 	reply := simpleString("FULLRESYNC " + s.replID + " " + strconv.FormatInt(s.replOffset, 10))
-	return append(reply, rdbTransfer(emptyRDB())...)
+	reply = append(reply, rdbTransfer(emptyRDB())...)
+
+	// The snapshot is queued in the same breath as the client becomes a
+	// replica, with the server's lock held: the commands propagated from now
+	// on can only come after it.
+	s.addReplica(c)
+	c.outbox.push(reply)
+	return nil
+}
+
+// addReplica makes the client a replica of the server: it receives the
+// commands that modify the dataset from now on. Doing it again for a client
+// that is already a replica changes nothing.
+func (s *Server) addReplica(c *client) {
+	if c.outbox == nil {
+		c.outbox = newOutbox()
+		go c.outbox.run(c.conn)
+	}
+	s.replicas[c] = struct{}{}
+}
+
+// removeReplica makes the server forget about a replica that is gone. It does
+// nothing if the client isn't a replica.
+func (s *Server) removeReplica(c *client) {
+	delete(s.replicas, c)
+	if c.outbox != nil {
+		c.outbox.close()
+	}
+}
+
+// propagate hands a command that modified the dataset over to the replicas,
+// which keep their copy of the dataset up to date by executing the same
+// commands as the master, in the same order. The command is given as it must
+// be executed by the replicas, name first.
+//
+// It must be called by every command that changes the dataset, once the
+// change is made and with the server's lock still held: that's what keeps
+// the replication stream in the order the changes happened.
+func (s *Server) propagate(command ...string) {
+	if s.batching {
+		s.batch = append(s.batch, command)
+		return
+	}
+	s.feedReplicas(encodeCommandArray(command...))
+}
+
+// beginPropagationBatch makes the commands propagated from now on be held
+// back until endPropagationBatch is called.
+func (s *Server) beginPropagationBatch() {
+	s.batching = true
+}
+
+// endPropagationBatch sends the replicas the commands that were held back
+// since beginPropagationBatch, wrapped in MULTI and EXEC so that the replicas
+// execute them as a single transaction. Nothing is sent if no command was
+// propagated in the meantime.
+func (s *Server) endPropagationBatch() {
+	batch := s.batch
+	s.batching, s.batch = false, nil
+	if len(batch) == 0 {
+		return
+	}
+
+	stream := encodeCommandArray("MULTI")
+	for _, command := range batch {
+		stream = append(stream, encodeCommandArray(command...)...)
+	}
+	stream = append(stream, encodeCommandArray("EXEC")...)
+	s.feedReplicas(stream)
+}
+
+// feedReplicas appends data to the replication stream: it is sent to every
+// replica and the replication offset moves forward by its length. As long as
+// the server has no replica there is no stream, and nothing to do.
+func (s *Server) feedReplicas(data []byte) {
+	if len(s.replicas) == 0 {
+		return
+	}
+	s.replOffset += int64(len(data))
+	for replica := range s.replicas {
+		replica.outbox.push(data)
+	}
+}
+
+// outbox is a queue of data waiting to be written to a connection. Pushing to
+// it never blocks, however slow the other end is at reading: the server can
+// feed its replicas while holding its lock without ever being held up by one
+// of them.
+type outbox struct {
+	mu      sync.Mutex
+	ready   *sync.Cond
+	pending [][]byte
+	closed  bool
+}
+
+func newOutbox() *outbox {
+	o := &outbox{}
+	o.ready = sync.NewCond(&o.mu)
+	return o
+}
+
+// push queues data to be written. Data pushed after the outbox is closed is
+// dropped. The caller must not modify data afterwards.
+func (o *outbox) push(data []byte) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.closed {
+		return
+	}
+	o.pending = append(o.pending, data)
+	o.ready.Signal()
+}
+
+// close makes run return, dropping whatever is still waiting to be written.
+func (o *outbox) close() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.closed = true
+	o.pending = nil
+	o.ready.Signal()
+}
+
+// run writes what is pushed to the outbox to w, in order, until the outbox is
+// closed or writing fails.
+func (o *outbox) run(w io.Writer) {
+	for {
+		o.mu.Lock()
+		for len(o.pending) == 0 && !o.closed {
+			o.ready.Wait()
+		}
+		if o.closed {
+			o.mu.Unlock()
+			return
+		}
+		pending := o.pending
+		o.pending = nil
+		o.mu.Unlock()
+
+		for _, data := range pending {
+			if _, err := w.Write(data); err != nil {
+				o.close()
+				return
+			}
+		}
+	}
 }
 
 // rdbTransfer encodes an RDB file the way a master sends it to a replica:

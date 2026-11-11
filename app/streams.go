@@ -276,6 +276,9 @@ func cmdXAdd(c *client, args []string) []byte {
 	} else {
 		store.modified(key)
 	}
+	// Replicas are given the ID that was picked, not the "*" it may have been
+	// asked with: they have to store the very same entry.
+	c.server.propagate(append([]string{"XADD", key, id.String()}, fields...)...)
 	c.server.wakeStreamWaiters(key)
 	return bulkString(id.String())
 }

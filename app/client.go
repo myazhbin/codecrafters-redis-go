@@ -35,6 +35,10 @@ type client struct {
 	// listeningPort is the port a replica said it serves its own clients on,
 	// with REPLCONF listening-port. It is 0 for clients that didn't say.
 	listeningPort int
+	// outbox is set once the client has become a replica. From then on
+	// everything sent to it, replies included, goes through the outbox, so
+	// that it all reaches the replica in the order it was produced.
+	outbox *outbox
 	// executing is set while EXEC runs the queued commands. Commands that
 	// would otherwise block must not do so then: a transaction runs from
 	// start to finish without letting any other client in.
@@ -64,10 +68,12 @@ func (s *Server) handleConnection(conn net.Conn) {
 	defer cancel()
 	c := &client{server: s, conn: conn, ctx: ctx}
 	defer func() {
-		// A client that is gone must not stay registered as a watcher.
+		// A client that is gone must not stay registered as a watcher, nor
+		// as a replica.
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		c.unwatch()
+		s.removeReplica(c)
 	}()
 
 	for req := range c.readRequests(cancel) {
@@ -82,10 +88,21 @@ func (s *Server) handleConnection(conn net.Conn) {
 		if reply == nil {
 			continue
 		}
-		if _, err := conn.Write(reply); err != nil {
+		if err := c.send(reply); err != nil {
 			return
 		}
 	}
+}
+
+// send sends a reply to the client. It is only called by the goroutine that
+// serves the client.
+func (c *client) send(reply []byte) error {
+	if c.outbox != nil {
+		c.outbox.push(reply)
+		return nil
+	}
+	_, err := c.conn.Write(reply)
+	return err
 }
 
 // readRequests reads the client's commands on a separate goroutine and

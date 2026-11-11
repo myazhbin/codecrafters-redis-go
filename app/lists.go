@@ -74,6 +74,9 @@ func (l *list) slice(start, stop int) []string {
 
 // popFromList removes and returns the first element of the list l stored at
 // key, deleting the key if that leaves the list empty.
+//
+// Replicas are told to do the same with an LPOP, whatever the command that
+// made the element go: they never have to wait for an element themselves.
 func (s *Server) popFromList(key string, l *list) string {
 	element := l.popFront(1)[0]
 	if len(l.items) == 0 {
@@ -81,6 +84,7 @@ func (s *Server) popFromList(key string, l *list) string {
 	} else {
 		s.store.modified(key)
 	}
+	s.propagate("LPOP", key)
 	return element
 }
 
@@ -133,7 +137,7 @@ func (s *Server) serveListWaiters(key string) {
 // elements to the list stored at key, creating the list if needed, and
 // replies with the new length of the list.
 func cmdRPush(c *client, args []string) []byte {
-	return pushCommand(c, args, (*list).pushBack)
+	return pushCommand(c, "RPUSH", args, (*list).pushBack)
 }
 
 // cmdLPush implements LPUSH key element [element ...]: it inserts the
@@ -143,12 +147,12 @@ func cmdRPush(c *client, args []string) []byte {
 // Since each element is inserted in front of the previous one,
 // "LPUSH key a b c" on a new key produces the list [c b a].
 func cmdLPush(c *client, args []string) []byte {
-	return pushCommand(c, args, (*list).pushFront)
+	return pushCommand(c, "LPUSH", args, (*list).pushFront)
 }
 
 // pushCommand implements RPUSH and LPUSH, which only differ by the end of the
-// list that push adds the elements to.
-func pushCommand(c *client, args []string, push func(l *list, elements ...string)) []byte {
+// list that push adds the elements to. name is the name of the command.
+func pushCommand(c *client, name string, args []string, push func(l *list, elements ...string)) []byte {
 	s := c.server
 	key := args[0]
 
@@ -158,6 +162,7 @@ func pushCommand(c *client, args []string, push func(l *list, elements ...string
 	}
 	push(l, args[1:]...)
 	s.store.modified(key)
+	s.propagate(append([]string{name}, args...)...)
 
 	// The reply is the length of the list right after the push, even if some
 	// of the new elements are immediately taken by blocked clients.
@@ -208,6 +213,9 @@ func cmdLPop(c *client, args []string) []byte {
 		s.store.delete(key)
 	} else if len(popped) > 0 {
 		s.store.modified(key)
+	}
+	if len(popped) > 0 {
+		s.propagate("LPOP", key, args[1])
 	}
 	return bulkStringArray(popped)
 }
@@ -302,6 +310,8 @@ func cmdBLPop(c *client, args []string) []byte {
 		// the head of its list, for the next client.
 		if l, err := s.store.getOrCreateList(popped.key); err == nil {
 			l.pushFront(popped.element)
+			s.store.modified(popped.key)
+			s.propagate("LPUSH", popped.key, popped.element)
 			s.serveListWaiters(popped.key)
 		}
 		return nil

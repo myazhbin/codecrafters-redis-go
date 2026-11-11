@@ -42,6 +42,7 @@ func cmdSet(c *client, args []string) []byte {
 	}
 
 	store.setString(key, value, expiresAt)
+	c.server.propagate(append([]string{"SET"}, args...)...)
 	return simpleString("OK")
 }
 
@@ -115,5 +116,6 @@ func cmdIncr(c *client, args []string) []byte {
 	}
 	n++
 	store.setString(key, strconv.FormatInt(n, 10), expiresAt)
+	c.server.propagate("INCR", key)
 	return integerReply(n)
 }
