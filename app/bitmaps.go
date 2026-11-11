@@ -250,3 +250,61 @@ func cmdBitCount(c *client, args []string) []byte {
 	}
 	return integerReply(countBits(value, start, end))
 }
+
+// cmdBitOp implements BITOP operation destkey key [key ...]: it combines the
+// strings stored at the keys, bit by bit, and stores the result at destkey,
+// replacing whatever it held. The reply is the length of the result, in
+// bytes.
+//
+// The operation is AND: a bit of the result is 1 when that bit is 1 in every
+// one of the strings.
+//
+// The result is as long as the longest of the strings. The shorter ones, and
+// the keys that don't exist, count as if they were extended with zero bytes.
+// If all of the strings are empty, so is the result: there is nothing to
+// store, and destkey is deleted instead.
+func cmdBitOp(c *client, args []string) []byte {
+	s := c.server
+	operation, dest, keys := strings.ToUpper(args[0]), args[1], args[2:]
+	if operation != "AND" {
+		return errorReply("ERR syntax error")
+	}
+
+	// Every key is read before anything is written: destkey can be one of
+	// them.
+	sources := make([]string, len(keys))
+	length := 0
+	for i, key := range keys {
+		value, _, err := s.store.getString(key)
+		if err != nil {
+			return errorReply(err.Error())
+		}
+		sources[i] = value
+		length = max(length, len(value))
+	}
+
+	if length == 0 {
+		if _, exists := s.store.lookup(dest); exists {
+			s.store.delete(dest)
+			s.propagate(append([]string{"BITOP"}, args...)...)
+		}
+		return integerReply(0)
+	}
+
+	// The result starts as the first string, extended with zeros, and is
+	// combined with each of the others in turn.
+	result := make([]byte, length)
+	copy(result, sources[0])
+	for _, source := range sources[1:] {
+		// Byte by byte: ranging over a string would go rune by rune.
+		for i := 0; i < len(source); i++ {
+			result[i] &= source[i]
+		}
+		// The zeros the string is extended with clear what is left.
+		clear(result[len(source):])
+	}
+
+	s.store.setString(dest, string(result), noExpiry)
+	s.propagate(append([]string{"BITOP"}, args...)...)
+	return integerReply(length)
+}
