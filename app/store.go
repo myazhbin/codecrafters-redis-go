@@ -17,7 +17,7 @@ var errWrongType = errors.New("WRONGTYPE Operation against a key holding the wro
 // entry is what the keyspace stores for a key.
 type entry struct {
 	// value is the key's value. Its dynamic type is the type of the key:
-	// string for strings and *list for lists.
+	// string for strings, *list for lists and *stream for streams.
 	value any
 	// expiresAt is the instant from which the key no longer exists. The zero
 	// time means the key never expires.
@@ -32,6 +32,8 @@ func (e entry) typeName() string {
 		return "string"
 	case *list:
 		return "list"
+	case *stream:
+		return "stream"
 	default:
 		panic(fmt.Sprintf("keyspace holds a value of unexpected type %T", e.value))
 	}
@@ -84,18 +86,26 @@ func (st *store) delete(key string) {
 	delete(st.entries, key)
 }
 
+// valueAt returns the value stored at key if it is of type T, and whether the
+// key exists. It fails with errWrongType if the key holds a value of another
+// type.
+func valueAt[T any](st *store, key string) (T, bool, error) {
+	var none T
+	e, ok := st.lookup(key)
+	if !ok {
+		return none, false, nil
+	}
+	value, ok := e.value.(T)
+	if !ok {
+		return none, false, errWrongType
+	}
+	return value, true, nil
+}
+
 // getString returns the string stored at key, and whether the key exists. It
 // fails with errWrongType if the key holds something else than a string.
 func (st *store) getString(key string) (string, bool, error) {
-	e, ok := st.lookup(key)
-	if !ok {
-		return "", false, nil
-	}
-	value, ok := e.value.(string)
-	if !ok {
-		return "", false, errWrongType
-	}
-	return value, true, nil
+	return valueAt[string](st, key)
 }
 
 // setString stores a string at key, replacing any previous value (whatever
@@ -108,15 +118,8 @@ func (st *store) setString(key, value string, expiresAt time.Time) {
 // getList returns the list stored at key, or nil if the key doesn't exist. It
 // fails with errWrongType if the key holds something else than a list.
 func (st *store) getList(key string) (*list, error) {
-	e, ok := st.lookup(key)
-	if !ok {
-		return nil, nil
-	}
-	l, ok := e.value.(*list)
-	if !ok {
-		return nil, errWrongType
-	}
-	return l, nil
+	l, _, err := valueAt[*list](st, key)
+	return l, err
 }
 
 // getOrCreateList returns the list stored at key, creating it if the key
@@ -135,4 +138,17 @@ func (st *store) getOrCreateList(key string) (*list, error) {
 		st.entries[key] = entry{value: l}
 	}
 	return l, nil
+}
+
+// getStream returns the stream stored at key, or nil if the key doesn't
+// exist. It fails with errWrongType if the key holds something else than a
+// stream.
+func (st *store) getStream(key string) (*stream, error) {
+	stream, _, err := valueAt[*stream](st, key)
+	return stream, err
+}
+
+// setStream stores a stream at key, replacing any previous value.
+func (st *store) setStream(key string, value *stream) {
+	st.entries[key] = entry{value: value}
 }

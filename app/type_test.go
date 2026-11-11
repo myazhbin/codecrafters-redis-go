@@ -130,6 +130,7 @@ func TestEntryTypeName(t *testing.T) {
 		{"text", "string"},
 		{"", "string"},
 		{&list{}, "list"},
+		{&stream{}, "stream"},
 	}
 	for _, tt := range tests {
 		if got := (entry{value: tt.value}).typeName(); got != tt.want {
