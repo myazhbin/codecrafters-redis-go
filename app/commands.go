@@ -35,6 +35,7 @@ var commands = map[string]command{
 	"GET":  {arity: 2, handler: cmdGet},
 	"TYPE": {arity: 2, handler: cmdType},
 	"INCR": {arity: 2, handler: cmdIncr},
+	"INFO": {arity: -1, handler: cmdInfo},
 
 	"RPUSH":  {arity: -3, handler: cmdRPush},
 	"LPUSH":  {arity: -3, handler: cmdLPush},
