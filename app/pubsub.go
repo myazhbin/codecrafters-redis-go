@@ -15,6 +15,9 @@ func cmdSubscribe(c *client, args []string) []byte {
 	if !c.canSubscribe() {
 		return errorReply("ERR SUBSCRIBE isn't allowed for a DENY BLOCKING client")
 	}
+	// A subscriber is sent things it didn't ask for, by the clients that
+	// publish them.
+	c.openOutbox()
 
 	var reply []byte
 	for _, channel := range args {
@@ -86,12 +89,35 @@ func (c *client) unsubscribeAll() {
 	}
 }
 
-// cmdPublish implements PUBLISH channel message: it replies with the number
-// of clients that are subscribed to the channel, which is 0 for a channel
-// nobody listens to. The message can be any string.
+// cmdPublish implements PUBLISH channel message: it sends the message, which
+// can be any string, to the clients that are subscribed to the channel, and
+// replies with their number. Publishing to a channel nobody is subscribed to
+// is fine: the message is lost and the reply is 0.
 //
-// Subscriptions are per server: the clients counted are the ones subscribed
-// through this server, and nothing is passed on to its replicas.
+// Subscriptions are per server: the message goes to the clients subscribed
+// through this server, and isn't passed on to its replicas.
 func cmdPublish(c *client, args []string) []byte {
-	return integerReply(len(c.server.subscribers[args[0]]))
+	return integerReply(c.server.publish(args[0], args[1]))
+}
+
+// publish sends message to every client subscribed to channel, as an array
+// made of "message", the name of the channel and the message itself. It
+// returns the number of clients the message was sent to.
+//
+// Nothing waits for the subscribers to read: the message is left in the
+// outbox of each of them, behind what they were sent before. A subscriber
+// therefore gets the messages of a channel in the order they were published,
+// which is the same for all of them.
+func (s *Server) publish(channel, message string) int {
+	subscribers := s.subscribers[channel]
+	if len(subscribers) == 0 {
+		return 0
+	}
+
+	// Encoded once: the subscribers share the bytes, which nobody modifies.
+	data := bulkStringArray([]string{"message", channel, message})
+	for subscriber := range subscribers {
+		subscriber.outbox.push(data)
+	}
+	return len(subscribers)
 }

@@ -11,7 +11,6 @@ import (
 	"net"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -343,10 +342,7 @@ func cmdPsync(c *client, args []string) []byte {
 // commands that modify the dataset from now on. Doing it again for a client
 // that is already a replica changes nothing.
 func (s *Server) addReplica(c *client) {
-	if c.outbox == nil {
-		c.outbox = newOutbox()
-		go c.outbox.run(c.conn)
-	}
+	c.openOutbox()
 	// The snapshot brings the replica up to where the stream is now.
 	c.ackOffset = s.replOffset
 	s.replicas[c] = struct{}{}
@@ -356,9 +352,6 @@ func (s *Server) addReplica(c *client) {
 // nothing if the client isn't a replica.
 func (s *Server) removeReplica(c *client) {
 	delete(s.replicas, c)
-	if c.outbox != nil {
-		c.outbox.close()
-	}
 }
 
 // propagate records a command that modified the dataset, for those that
@@ -424,69 +417,6 @@ func (s *Server) feedReplicas(data []byte) {
 	s.replOffset += int64(len(data))
 	for replica := range s.replicas {
 		replica.outbox.push(data)
-	}
-}
-
-// outbox is a queue of data waiting to be written to a connection. Pushing to
-// it never blocks, however slow the other end is at reading: the server can
-// feed its replicas while holding its lock without ever being held up by one
-// of them.
-type outbox struct {
-	mu      sync.Mutex
-	ready   *sync.Cond
-	pending [][]byte
-	closed  bool
-}
-
-func newOutbox() *outbox {
-	o := &outbox{}
-	o.ready = sync.NewCond(&o.mu)
-	return o
-}
-
-// push queues data to be written. Data pushed after the outbox is closed is
-// dropped. The caller must not modify data afterwards.
-func (o *outbox) push(data []byte) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	if o.closed {
-		return
-	}
-	o.pending = append(o.pending, data)
-	o.ready.Signal()
-}
-
-// close makes run return, dropping whatever is still waiting to be written.
-func (o *outbox) close() {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	o.closed = true
-	o.pending = nil
-	o.ready.Signal()
-}
-
-// run writes what is pushed to the outbox to w, in order, until the outbox is
-// closed or writing fails.
-func (o *outbox) run(w io.Writer) {
-	for {
-		o.mu.Lock()
-		for len(o.pending) == 0 && !o.closed {
-			o.ready.Wait()
-		}
-		if o.closed {
-			o.mu.Unlock()
-			return
-		}
-		pending := o.pending
-		o.pending = nil
-		o.mu.Unlock()
-
-		for _, data := range pending {
-			if _, err := w.Write(data); err != nil {
-				o.close()
-				return
-			}
-		}
 	}
 }
 

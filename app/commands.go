@@ -76,7 +76,8 @@ var commands = map[string]command{
 }
 
 // execute runs a single command sent by the client and returns the reply to
-// send back, or nil if there is none. Command names are case-insensitive.
+// send back, or nil if there is none left to send. Command names are
+// case-insensitive.
 func (c *client) execute(args []string) []byte {
 	name := strings.ToUpper(args[0])
 
@@ -91,6 +92,22 @@ func (c *client) execute(args []string) []byte {
 	c.server.mu.Lock()
 	defer c.server.mu.Unlock()
 
+	reply := c.run(cmd, args)
+	// As soon as the lock is released, other clients can have things sent to
+	// a client that has an outbox. The reply is queued before that happens,
+	// so that it comes first: a client learns that it is subscribed to a
+	// channel before it gets anything published to that channel.
+	if reply != nil && c.outbox != nil {
+		c.outbox.push(reply)
+		return nil
+	}
+	return reply
+}
+
+// run executes a command that is known to exist and to have a valid number
+// of arguments, given as the client sent it, and returns its reply. It is
+// called with the server's lock held.
+func (c *client) run(cmd command, args []string) []byte {
 	// A client that is subscribed to channels uses its connection to receive
 	// what is published to them. The only commands it can still send are the
 	// ones made for that mode.

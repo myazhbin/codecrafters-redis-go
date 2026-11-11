@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"io"
 	"net"
+	"sync"
 )
 
 // readAhead is the number of commands that can be read from a client while
@@ -35,9 +37,12 @@ type client struct {
 	// listeningPort is the port a replica said it serves its own clients on,
 	// with REPLCONF listening-port. It is 0 for clients that didn't say.
 	listeningPort int
-	// outbox is set once the client has become a replica. From then on
-	// everything sent to it, replies included, goes through the outbox, so
-	// that it all reaches the replica in the order it was produced.
+	// outbox is set once the client is sent things besides the replies to
+	// its commands: when it becomes a replica, which receives the commands
+	// that modify the dataset, or a subscriber, which receives what is
+	// published to its channels. From then on everything sent to it, replies
+	// included, goes through the outbox, so that it all reaches the client
+	// whole and in the order it was produced.
 	outbox *outbox
 	// isMaster is set, on a replica, for the client that stands for the
 	// master: the one whose commands come from the replication stream.
@@ -79,18 +84,21 @@ func (s *Server) handleConnection(conn net.Conn) {
 	c := &client{server: s, conn: conn, ctx: ctx}
 	defer func() {
 		// A client that is gone must not stay registered as a watcher, as a
-		// subscriber or as a replica.
+		// subscriber or as a replica, and nothing more is sent to it.
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		c.unwatch()
 		c.unsubscribeAll()
 		s.removeReplica(c)
+		if c.outbox != nil {
+			c.outbox.close()
+		}
 	}()
 
 	for req := range c.readRequests(cancel) {
 		if req.err != nil {
 			if errors.Is(req.err, errProtocol) {
-				conn.Write(errorReply("ERR " + req.err.Error()))
+				c.send(errorReply("ERR " + req.err.Error()))
 			}
 			return
 		}
@@ -114,6 +122,80 @@ func (c *client) send(reply []byte) error {
 	}
 	_, err := c.conn.Write(reply)
 	return err
+}
+
+// openOutbox gives the client an outbox, unless it has one already: from then
+// on other clients can have things sent to it. It must be called by the
+// goroutine that serves the client, with the server's lock held.
+func (c *client) openOutbox() {
+	if c.outbox != nil {
+		return
+	}
+	c.outbox = newOutbox()
+	go c.outbox.run(c.conn)
+}
+
+// outbox is a queue of data waiting to be written to a connection. Pushing to
+// it never blocks, however slow the other end is at reading: the server can
+// feed its replicas and its subscribers while holding its lock without ever
+// being held up by one of them.
+type outbox struct {
+	mu      sync.Mutex
+	ready   *sync.Cond
+	pending [][]byte
+	closed  bool
+}
+
+func newOutbox() *outbox {
+	o := &outbox{}
+	o.ready = sync.NewCond(&o.mu)
+	return o
+}
+
+// push queues data to be written. Data pushed after the outbox is closed is
+// dropped. The caller must not modify data afterwards.
+func (o *outbox) push(data []byte) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.closed {
+		return
+	}
+	o.pending = append(o.pending, data)
+	o.ready.Signal()
+}
+
+// close makes run return, dropping whatever is still waiting to be written.
+func (o *outbox) close() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.closed = true
+	o.pending = nil
+	o.ready.Signal()
+}
+
+// run writes what is pushed to the outbox to w, in order, until the outbox is
+// closed or writing fails.
+func (o *outbox) run(w io.Writer) {
+	for {
+		o.mu.Lock()
+		for len(o.pending) == 0 && !o.closed {
+			o.ready.Wait()
+		}
+		if o.closed {
+			o.mu.Unlock()
+			return
+		}
+		pending := o.pending
+		o.pending = nil
+		o.mu.Unlock()
+
+		for _, data := range pending {
+			if _, err := w.Write(data); err != nil {
+				o.close()
+				return
+			}
+		}
+	}
 }
 
 // readRequests reads the client's commands on a separate goroutine and
