@@ -74,6 +74,17 @@ func (z *sortedSet) add(member string, score float64) (added, changed bool) {
 	return !exists, true
 }
 
+// rank returns the rank of member: its position in the set, counting from 0,
+// when the members are in order. It also reports whether the member is in
+// the set at all.
+func (z *sortedSet) rank(member string) (int, bool) {
+	score, ok := z.scores[member]
+	if !ok {
+		return 0, false
+	}
+	return z.position(scoredMember{member, score}), true
+}
+
 // parseScore parses the score of a member of a sorted set: a 64-bit
 // floating-point number. It can be infinite ("inf", "+inf", "-inf"), but it
 // has to be a number.
@@ -132,4 +143,26 @@ func cmdZAdd(c *client, args []string) []byte {
 		s.propagate(append([]string{"ZADD"}, args...)...)
 	}
 	return integerReply(added)
+}
+
+// cmdZRank implements ZRANK key member: it replies with the rank of the
+// member in the sorted set stored at key, which is its position, counting
+// from 0, when the members are ordered by increasing score. Members that
+// have the same score are ordered lexicographically.
+//
+// The reply is a null bulk string if the member isn't in the set, or if the
+// key doesn't exist.
+func cmdZRank(c *client, args []string) []byte {
+	z, err := c.server.store.getSortedSet(args[0])
+	if err != nil {
+		return errorReply(err.Error())
+	}
+	if z == nil {
+		return nullBulkString
+	}
+	rank, ok := z.rank(args[1])
+	if !ok {
+		return nullBulkString
+	}
+	return integerReply(rank)
 }
