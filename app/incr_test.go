@@ -186,6 +186,132 @@ func TestIncrIsAtomic(t *testing.T) {
 	expectReply(t, setup, bulk(strconv.Itoa(clients*incrementsPerClient)))
 }
 
+func TestIncrMissingKey(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	// A key that doesn't exist counts as 0: its value becomes 1.
+	do(t, conn, "INCR", "foo")
+	expectReply(t, conn, ":1\r\n")
+	do(t, conn, "INCR", "bar")
+	expectReply(t, conn, ":1\r\n")
+}
+
+func TestIncrMissingKeyCreatesAString(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	do(t, conn, "INCR", "missing_key")
+	expectReply(t, conn, ":1\r\n")
+
+	do(t, conn, "GET", "missing_key")
+	expectReply(t, conn, "$1\r\n1\r\n")
+	do(t, conn, "TYPE", "missing_key")
+	expectReply(t, conn, "+string\r\n")
+}
+
+func TestIncrMissingKeyThenKeepsCounting(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	for want := 1; want <= 12; want++ {
+		do(t, conn, "INCR", "counter")
+		expectReply(t, conn, ":"+strconv.Itoa(want)+"\r\n")
+	}
+	do(t, conn, "GET", "counter")
+	expectReply(t, conn, "$2\r\n12\r\n")
+}
+
+func TestIncrCreatedKeyNeverExpires(t *testing.T) {
+	addr, clock := startTestServerWithClock(t)
+	conn := dial(t, addr)
+
+	do(t, conn, "INCR", "counter")
+	expectReply(t, conn, ":1\r\n")
+
+	clock.Advance(100 * 365 * 24 * time.Hour)
+	do(t, conn, "GET", "counter")
+	expectReply(t, conn, "$1\r\n1\r\n")
+}
+
+func TestIncrExpiredKeyStartsOver(t *testing.T) {
+	addr, clock := startTestServerWithClock(t)
+	conn := dial(t, addr)
+
+	do(t, conn, "SET", "counter", "41", "PX", "100")
+	expectReply(t, conn, "+OK\r\n")
+	clock.Advance(100 * time.Millisecond)
+
+	// The old value is gone, and so is its expiry.
+	do(t, conn, "INCR", "counter")
+	expectReply(t, conn, ":1\r\n")
+	clock.Advance(time.Hour)
+	do(t, conn, "GET", "counter")
+	expectReply(t, conn, "$1\r\n1\r\n")
+}
+
+func TestIncrKeyOfEmptiedListStartsOver(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	do(t, conn, "RPUSH", "key", "only")
+	expectReply(t, conn, ":1\r\n")
+	do(t, conn, "LPOP", "key")
+	expectReply(t, conn, "$4\r\nonly\r\n")
+
+	// The list is gone, so the key is free to become a counter.
+	do(t, conn, "INCR", "key")
+	expectReply(t, conn, ":1\r\n")
+}
+
+func TestIncrMissingKeysAreIndependent(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	do(t, conn, "INCR", "first")
+	expectReply(t, conn, ":1\r\n")
+	do(t, conn, "INCR", "first")
+	expectReply(t, conn, ":2\r\n")
+	do(t, conn, "INCR", "second")
+	expectReply(t, conn, ":1\r\n")
+	do(t, conn, "INCR", randomWord(t))
+	expectReply(t, conn, ":1\r\n")
+}
+
+func TestIncrMissingKeyIsAtomic(t *testing.T) {
+	addr := startTestServer(t)
+
+	const clients = 20
+	conns := make([]net.Conn, clients)
+	for i := range conns {
+		conns[i] = dial(t, addr)
+	}
+
+	// Everybody increments a key that doesn't exist yet at the same time:
+	// exactly one of them creates it, and every reply is a different number.
+	replies := make(chan string, clients)
+	var wg sync.WaitGroup
+	for _, conn := range conns {
+		wg.Add(1)
+		go func(conn net.Conn) {
+			defer wg.Done()
+			conn.Write([]byte(encodeCommand("INCR", "fresh")))
+			line, _ := bufio.NewReader(conn).ReadString('\n')
+			replies <- line
+		}(conn)
+	}
+	wg.Wait()
+	close(replies)
+
+	seen := make(map[string]bool)
+	for reply := range replies {
+		if seen[reply] {
+			t.Fatalf("two clients got the same reply %q", reply)
+		}
+		seen[reply] = true
+	}
+	for want := 1; want <= clients; want++ {
+		if reply := ":" + strconv.Itoa(want) + "\r\n"; !seen[reply] {
+			t.Fatalf("no client got the reply %q", reply)
+		}
+	}
+}
+
 func TestIncrWrongNumberOfArguments(t *testing.T) {
 	conn := dial(t, startTestServer(t))
 
