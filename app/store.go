@@ -17,7 +17,8 @@ var errWrongType = errors.New("WRONGTYPE Operation against a key holding the wro
 // entry is what the keyspace stores for a key.
 type entry struct {
 	// value is the key's value. Its dynamic type is the type of the key:
-	// string for strings, *list for lists and *stream for streams.
+	// string for strings, *list for lists, *stream for streams and
+	// *sortedSet for sorted sets.
 	value any
 	// expiresAt is the instant from which the key no longer exists. The zero
 	// time means the key never expires.
@@ -34,6 +35,8 @@ func (e entry) typeName() string {
 		return "list"
 	case *stream:
 		return "stream"
+	case *sortedSet:
+		return "zset"
 	default:
 		panic(fmt.Sprintf("keyspace holds a value of unexpected type %T", e.value))
 	}
@@ -182,4 +185,30 @@ func (st *store) getStream(key string) (*stream, error) {
 func (st *store) setStream(key string, value *stream) {
 	st.entries[key] = entry{value: value}
 	st.modified(key)
+}
+
+// getSortedSet returns the sorted set stored at key, or nil if the key
+// doesn't exist. It fails with errWrongType if the key holds something else
+// than a sorted set.
+func (st *store) getSortedSet(key string) (*sortedSet, error) {
+	z, _, err := valueAt[*sortedSet](st, key)
+	return z, err
+}
+
+// getOrCreateSortedSet returns the sorted set stored at key, creating it if
+// the key doesn't exist. It fails with errWrongType if the key holds
+// something else than a sorted set.
+//
+// Sorted sets never stay empty in the keyspace: callers must add at least one
+// member to a set they created, and delete the key of a set they emptied.
+func (st *store) getOrCreateSortedSet(key string) (*sortedSet, error) {
+	z, err := st.getSortedSet(key)
+	if err != nil {
+		return nil, err
+	}
+	if z == nil {
+		z = newSortedSet()
+		st.entries[key] = entry{value: z}
+	}
+	return z, nil
 }

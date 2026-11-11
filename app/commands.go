@@ -71,6 +71,8 @@ var commands = map[string]command{
 	"WATCH":   {arity: -2, handler: cmdWatch, immediate: true},
 	"UNWATCH": {arity: 1, handler: cmdUnwatch},
 
+	"ZADD": {arity: -4, handler: cmdZAdd},
+
 	"SUBSCRIBE":   {arity: -2, handler: cmdSubscribe, pubsub: true},
 	"UNSUBSCRIBE": {arity: -1, handler: cmdUnsubscribe, pubsub: true},
 	"PUBLISH":     {arity: 3, handler: cmdPublish},
