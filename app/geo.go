@@ -2,6 +2,7 @@ package main
 
 import (
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -302,4 +303,155 @@ func cmdGeoDist(c *client, args []string) []byte {
 	// to be at, which are those their scores stand for.
 	meters := locationOfScore(from).distanceTo(locationOfScore(to))
 	return bulkString(strconv.FormatFloat(meters/unit, 'f', 4, 64))
+}
+
+// cmdGeoSearch implements GEOSEARCH key <FROMLONLAT longitude latitude |
+// FROMMEMBER member> BYRADIUS radius <M | KM | FT | MI> [ASC | DESC] [COUNT
+// count [ANY]]: it replies with the members of the set of locations stored at
+// key that are within a circle, as an array of their names. A key that
+// doesn't exist is a set without any location.
+//
+// The center of the circle is either a point given by its coordinates, with
+// FROMLONLAT, or the position of a member of the set, with FROMMEMBER. Its
+// radius is given with BYRADIUS, in the unit that follows it. A member that
+// is exactly that far from the center is in the circle.
+//
+// ASC and DESC ask for the members to be sorted by their distance from the
+// center, nearest or farthest first. Without them, the order isn't specified.
+// COUNT limits the reply to that many members, the nearest ones unless DESC
+// says otherwise. With ANY the search stops as soon as that many members are
+// found, whichever they are, rather than look for the nearest ones.
+//
+// The options can be given in any order. The other ones Redis has, which
+// search a rectangle or add details to the reply, aren't supported.
+func cmdGeoSearch(c *client, args []string) []byte {
+	z, err := c.server.store.getSortedSet(args[0])
+	if err != nil {
+		return errorReply(err.Error())
+	}
+
+	var (
+		center               location
+		radius               float64 // in meters
+		hasCenter, hasRadius bool
+		ascending, sorted    bool
+		count                int
+		takeAny              bool
+	)
+	options := args[1:]
+	for i := 0; i < len(options); i++ {
+		switch option := strings.ToUpper(options[i]); {
+		case option == "FROMLONLAT" && i+2 < len(options) && !hasCenter:
+			var errReply []byte
+			if center, errReply = parseLocation(options[i+1], options[i+2]); errReply != nil {
+				return errReply
+			}
+			hasCenter = true
+			i += 2
+
+		case option == "FROMMEMBER" && i+1 < len(options) && !hasCenter:
+			if z != nil {
+				score, ok := z.scores[options[i+1]]
+				if !ok {
+					return errorReply("ERR could not decode requested zset member")
+				}
+				center = locationOfScore(score)
+			}
+			hasCenter = true
+			i++
+
+		case option == "BYRADIUS" && i+2 < len(options) && !hasRadius:
+			distance, ok := parseScore(options[i+1])
+			if !ok {
+				return errorReply("ERR need numeric radius")
+			}
+			if distance < 0 {
+				return errorReply("ERR radius cannot be negative")
+			}
+			unit, errReply := parseGeoUnit(options[i+2])
+			if errReply != nil {
+				return errReply
+			}
+			radius = distance * unit
+			hasRadius = true
+			i += 2
+
+		case option == "ASC":
+			ascending, sorted = true, true
+
+		case option == "DESC":
+			ascending, sorted = false, true
+
+		case option == "COUNT" && i+1 < len(options):
+			n, ok := parseInt(options[i+1])
+			if !ok {
+				return errorReply(errNotAnInteger)
+			}
+			if n <= 0 {
+				return errorReply("ERR COUNT must be > 0")
+			}
+			count = int(min(n, math.MaxInt32))
+			i++
+
+		case option == "ANY":
+			takeAny = true
+
+		default:
+			return errorReply("ERR syntax error")
+		}
+	}
+	switch {
+	case !hasCenter:
+		return errorReply("ERR exactly one of FROMMEMBER or FROMLONLAT can be specified for GEOSEARCH")
+	case !hasRadius:
+		return errorReply("ERR exactly one of BYRADIUS and BYBOX can be specified for GEOSEARCH")
+	case takeAny && count == 0:
+		return errorReply("ERR the ANY argument requires COUNT argument")
+	}
+	if z == nil {
+		return bulkStringArray(nil)
+	}
+
+	// Every member is looked at: its position is compared with the center.
+	// That is as long as the set is big, however small the circle is. The
+	// scores of the locations could tell which parts of the set are worth
+	// looking at, at the price of a much more involved search.
+	type match struct {
+		member   string
+		distance float64
+	}
+	var matches []match
+	for _, m := range z.ordered {
+		distance := center.distanceTo(locationOfScore(m.score))
+		if distance > radius {
+			continue
+		}
+		matches = append(matches, match{m.member, distance})
+		if takeAny && len(matches) == count {
+			break
+		}
+	}
+
+	// A limited number of members are the nearest ones, unless the client
+	// said it would take any, or asked for the farthest.
+	if count > 0 && !sorted && !takeAny {
+		ascending, sorted = true, true
+	}
+	if sorted {
+		sort.SliceStable(matches, func(i, j int) bool {
+			if ascending {
+				return matches[i].distance < matches[j].distance
+			}
+			return matches[i].distance > matches[j].distance
+		})
+	}
+	if count > 0 && len(matches) > count {
+		matches = matches[:count]
+	}
+
+	names := make([]string, len(matches))
+	for i, m := range matches {
+		names[i] = m.member
+	}
+	return bulkStringArray(names)
 }
