@@ -79,6 +79,15 @@ func parseStreamID(s string, missingSeq uint64) (streamID, error) {
 	return streamID{ms: ms, seq: seq}, nil
 }
 
+// parseRangeID parses one end of a range of entry IDs. It accepts the same
+// IDs as parseStreamID, plus "-" which stands for the smallest possible ID.
+func parseRangeID(s string, missingSeq uint64) (streamID, error) {
+	if s == "-" {
+		return streamID{}, nil
+	}
+	return parseStreamID(s, missingSeq)
+}
+
 // newEntryID is the ID argument of XADD: it describes the ID to give to a new
 // entry, parts of which may be left for the stream to choose.
 type newEntryID struct {
@@ -257,13 +266,14 @@ func cmdXAdd(c *client, args []string) []byte {
 //
 // The sequence number of both IDs is optional. When it's left out the whole
 // millisecond is covered: start begins at the first sequence number, and end
-// stops at the last one.
+// stops at the last one. A start of "-" means "from the first entry of the
+// stream".
 func cmdXRange(c *client, args []string) []byte {
-	start, err := parseStreamID(args[1], 0)
+	start, err := parseRangeID(args[1], 0)
 	if err != nil {
 		return errorReply(err.Error())
 	}
-	end, err := parseStreamID(args[2], math.MaxUint64)
+	end, err := parseRangeID(args[2], math.MaxUint64)
 	if err != nil {
 		return errorReply(err.Error())
 	}
