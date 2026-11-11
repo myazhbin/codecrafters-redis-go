@@ -15,6 +15,10 @@ type user struct {
 	// authenticated as that user, whatever the password they give, if they
 	// give one at all.
 	nopass bool
+	// passwords holds the passwords of the user, in the order they were
+	// added. The passwords themselves aren't kept, only their SHA-256 hash,
+	// written in hexadecimal.
+	passwords []string
 }
 
 // flags returns the flags of the user: short labels that describe how the
@@ -36,7 +40,8 @@ func (u *user) flags() []string {
 //     authenticated as, as a bulk string.
 //   - ACL GETUSER username replies with the properties of the user, as an
 //     array that alternates the names of the properties and their values:
-//     "flags", then the array of the flags of the user. The reply is a null
+//     "flags", then the array of the flags of the user, and "passwords",
+//     then the array of the hashes of its passwords. The reply is a null
 //     bulk string if there is no such user.
 //
 // Subcommand names are case-insensitive.
@@ -55,7 +60,10 @@ func cmdACL(c *client, args []string) []byte {
 		if !ok {
 			return nullBulkString
 		}
-		return arrayReply(bulkString("flags"), bulkStringArray(u.flags()))
+		return arrayReply(
+			bulkString("flags"), bulkStringArray(u.flags()),
+			bulkString("passwords"), bulkStringArray(u.passwords),
+		)
 	default:
 		return errorReply("ERR unknown subcommand '" + args[0] + "'. Try ACL HELP.")
 	}
