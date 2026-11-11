@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 )
@@ -14,10 +15,22 @@ const defaultPort = 6379
 type config struct {
 	// port is the TCP port the server listens on.
 	port int
-	// dir is the directory the RDB file is stored in.
+	// dir is the directory the server stores its data files in: the RDB
+	// file and the append-only files.
 	dir string
 	// dbFilename is the name of the RDB file, inside dir.
 	dbFilename string
+	// appendOnly tells whether AOF persistence is enabled: every write is
+	// then logged to a file that is replayed when the server starts.
+	appendOnly bool
+	// appendDirName is the name of the directory, inside dir, that holds
+	// the append-only file and its manifest.
+	appendDirName string
+	// appendFilename is the name of the append-only file.
+	appendFilename string
+	// appendFsync tells how often what is written to the append-only file is
+	// flushed to the disk: "always", "everysec" or "no".
+	appendFsync string
 	// replicaOf is the master the server replicates, or nil if the server is
 	// a master itself.
 	replicaOf *masterAddress
@@ -35,12 +48,21 @@ func (m masterAddress) String() string {
 }
 
 // defaultConfig returns the configuration of a server started without any
-// command-line argument.
+// command-line argument. Its data directory is the directory the server was
+// started from.
 func defaultConfig() config {
+	dir, err := os.Getwd()
+	if err != nil {
+		dir = "."
+	}
 	return config{
-		port:       defaultPort,
-		dir:        ".",
-		dbFilename: "dump.rdb",
+		port:           defaultPort,
+		dir:            dir,
+		dbFilename:     "dump.rdb",
+		appendOnly:     false,
+		appendDirName:  "appendonlydir",
+		appendFilename: "appendonly.aof",
+		appendFsync:    "everysec",
 	}
 }
 
@@ -130,9 +152,21 @@ var configParameters = []struct {
 	name  string
 	value func(cfg config) string
 }{
+	{"appenddirname", func(cfg config) string { return cfg.appendDirName }},
+	{"appendfilename", func(cfg config) string { return cfg.appendFilename }},
+	{"appendfsync", func(cfg config) string { return cfg.appendFsync }},
+	{"appendonly", func(cfg config) string { return yesNo(cfg.appendOnly) }},
 	{"dbfilename", func(cfg config) string { return cfg.dbFilename }},
 	{"dir", func(cfg config) string { return cfg.dir }},
 	{"port", func(cfg config) string { return strconv.Itoa(cfg.port) }},
+}
+
+// yesNo returns how Redis spells a boolean setting.
+func yesNo(b bool) string {
+	if b {
+		return "yes"
+	}
+	return "no"
 }
 
 // cmdConfig implements the CONFIG command, whose first argument selects what

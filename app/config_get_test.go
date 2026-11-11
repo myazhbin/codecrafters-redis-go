@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -42,8 +43,13 @@ func TestConfigGetDefaults(t *testing.T) {
 
 	do(t, conn, "CONFIG", "GET", "dbfilename")
 	expectReply(t, conn, bulkArray("dbfilename", "dump.rdb"))
+	// The data directory defaults to where the server was started from.
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getting the working directory: %v", err)
+	}
 	do(t, conn, "CONFIG", "GET", "dir")
-	expectReply(t, conn, bulkArray("dir", "."))
+	expectReply(t, conn, bulkArray("dir", cwd))
 	do(t, conn, "CONFIG", "GET", "port")
 	expectReply(t, conn, bulkArray("port", "6379"))
 }
@@ -86,12 +92,14 @@ func TestConfigGetPatterns(t *testing.T) {
 		pattern string
 		want    []string
 	}{
-		{"*", []string{"dbfilename", "db.rdb", "dir", "/data", "port", "6380"}},
 		{"d*", []string{"dbfilename", "db.rdb", "dir", "/data"}},
+		{"*i*", []string{"appenddirname", "appendonlydir", "appendfilename", "appendonly.aof", "dbfilename", "db.rdb", "dir", "/data"}},
 		{"db*", []string{"dbfilename", "db.rdb"}},
-		{"*name", []string{"dbfilename", "db.rdb"}},
+		{"*name", []string{"appenddirname", "appendonlydir", "appendfilename", "appendonly.aof", "dbfilename", "db.rdb"}},
+		{"db*name", []string{"dbfilename", "db.rdb"}},
 		{"di?", []string{"dir", "/data"}},
 		{"[dp]*r*", []string{"dir", "/data", "port", "6380"}},
+		{"p*", []string{"port", "6380"}},
 		{"x*", nil},
 		{"[", nil}, // malformed
 	}
