@@ -197,6 +197,135 @@ func TestXRangeFromTheBeginningAgainstOtherTypesIsWrongType(t *testing.T) {
 	expectReply(t, conn, wrongTypeError)
 }
 
+func TestXRangeToTheEnd(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	do(t, conn, "XADD", "stream_key", "0-1", "foo", "bar")
+	expectReply(t, conn, "$3\r\n0-1\r\n")
+	do(t, conn, "XADD", "stream_key", "0-2", "bar", "baz")
+	expectReply(t, conn, "$3\r\n0-2\r\n")
+	do(t, conn, "XADD", "stream_key", "0-3", "baz", "foo")
+	expectReply(t, conn, "$3\r\n0-3\r\n")
+
+	// "+" as the end: up to the last entry, whatever its ID is.
+	do(t, conn, "XRANGE", "stream_key", "0-2", "+")
+	expectReply(t, conn, ""+
+		"*2\r\n"+
+		"*2\r\n"+
+		"$3\r\n0-2\r\n"+
+		"*2\r\n"+
+		"$3\r\nbar\r\n"+
+		"$3\r\nbaz\r\n"+
+		"*2\r\n"+
+		"$3\r\n0-3\r\n"+
+		"*2\r\n"+
+		"$3\r\nbaz\r\n"+
+		"$3\r\nfoo\r\n")
+}
+
+func TestXRangeToTheEndWithMillisecondStart(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	do(t, conn, "XADD", "some_key", "1526985054059-0", "temperature", "35", "humidity", "96")
+	expectReply(t, conn, "$15\r\n1526985054059-0\r\n")
+	do(t, conn, "XADD", "some_key", "1526985054069-0", "temperature", "36", "humidity", "95")
+	expectReply(t, conn, "$15\r\n1526985054069-0\r\n")
+	do(t, conn, "XADD", "some_key", "1526985054079-0", "temperature", "37", "humidity", "94")
+	expectReply(t, conn, "$15\r\n1526985054079-0\r\n")
+
+	do(t, conn, "XRANGE", "some_key", "1526985054069", "+")
+	expectReply(t, conn, array(
+		entryReply("1526985054069-0", "temperature", "36", "humidity", "95"),
+		entryReply("1526985054079-0", "temperature", "37", "humidity", "94"),
+	))
+}
+
+func TestXRangeToTheEndBounds(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	ids := []string{"5-0", "5-1", "7-0", "9-3"}
+	for _, id := range ids {
+		do(t, conn, "XADD", "stream_key", id, "id", id)
+		expectReply(t, conn, bulk(id))
+	}
+
+	tests := []struct {
+		name  string
+		start string
+		want  []string
+	}{
+		{"from the first entry", "5-0", ids},
+		{"from an entry in the middle", "5-1", []string{"5-1", "7-0", "9-3"}},
+		{"from the last entry", "9-3", []string{"9-3"}},
+		{"from an ID before the first entry", "0-1", ids},
+		{"from an ID that is not an entry", "6-0", []string{"7-0", "9-3"}},
+		{"from a whole millisecond", "7", []string{"7-0", "9-3"}},
+		{"from an ID past the last entry", "9-4", nil},
+		{"from the end itself", "+", nil},
+		{"from the beginning: the whole stream", "-", ids},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entries := make([]string, len(tt.want))
+			for i, id := range tt.want {
+				entries[i] = entryReply(id, "id", id)
+			}
+
+			do(t, conn, "XRANGE", "stream_key", tt.start, "+")
+			expectReply(t, conn, array(entries...))
+		})
+	}
+}
+
+func TestXRangeToTheEndIncludesTheLargestID(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	const largest = "18446744073709551615-18446744073709551615"
+	do(t, conn, "XADD", "stream_key", largest, "foo", "bar")
+	expectReply(t, conn, bulk(largest))
+
+	do(t, conn, "XRANGE", "stream_key", "0-1", "+")
+	expectReply(t, conn, array(entryReply(largest, "foo", "bar")))
+	do(t, conn, "XRANGE", "stream_key", "+", "+")
+	expectReply(t, conn, array(entryReply(largest, "foo", "bar")))
+}
+
+func TestXRangeToTheEndSeesNewEntries(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	do(t, conn, "XADD", "stream_key", "1-1", "a", "1")
+	expectReply(t, conn, "$3\r\n1-1\r\n")
+	do(t, conn, "XRANGE", "stream_key", "1-1", "+")
+	expectReply(t, conn, array(entryReply("1-1", "a", "1")))
+
+	// The end of the stream moves as entries are added.
+	do(t, conn, "XADD", "stream_key", "2-0", "b", "2")
+	expectReply(t, conn, "$3\r\n2-0\r\n")
+	do(t, conn, "XRANGE", "stream_key", "1-1", "+")
+	expectReply(t, conn, array(entryReply("1-1", "a", "1"), entryReply("2-0", "b", "2")))
+}
+
+func TestXRangeWithBothSpecialIDsInReverse(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	do(t, conn, "XADD", "stream_key", "1-1", "a", "1")
+	expectReply(t, conn, "$3\r\n1-1\r\n")
+
+	// From the end to the beginning: nothing is in that range.
+	do(t, conn, "XRANGE", "stream_key", "+", "-")
+	expectReply(t, conn, "*0\r\n")
+}
+
+func TestXRangeToTheEndOfMissingStream(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	do(t, conn, "XRANGE", "missing", "0-1", "+")
+	expectReply(t, conn, "*0\r\n")
+	do(t, conn, "XRANGE", "missing", "-", "+")
+	expectReply(t, conn, "*0\r\n")
+}
+
 func TestXRangeMissingStream(t *testing.T) {
 	conn := dial(t, startTestServer(t))
 
@@ -379,4 +508,33 @@ func TestParseRangeIDMinimum(t *testing.T) {
 			t.Errorf("parseRangeID(%q) = %v, want an error", input, got)
 		}
 	}
+}
+
+func TestParseRangeIDMaximum(t *testing.T) {
+	const maxUint64 = 1<<64 - 1
+
+	// "+" is the largest ID, whatever the default sequence number is.
+	for _, missingSeq := range []uint64{0, maxUint64} {
+		if got, err := parseRangeID("+", missingSeq); err != nil || got != (streamID{maxUint64, maxUint64}) {
+			t.Errorf(`parseRangeID("+", %d) = (%v, %v), want (max-max, nil)`, missingSeq, got, err)
+		}
+	}
+	for _, input := range []string{"++", "+1", "+ ", "+-"} {
+		if got, err := parseRangeID(input, 0); err == nil {
+			t.Errorf("parseRangeID(%q) = %v, want an error", input, got)
+		}
+	}
+}
+
+func TestXAddRejectsRangeOnlyIDs(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
+	// "-" and "+" designate the ends of a stream in queries; they aren't IDs
+	// an entry can be given.
+	for _, id := range []string{"-", "+"} {
+		do(t, conn, "XADD", "stream_key", id, "foo", "bar")
+		expectReply(t, conn, invalidStreamIDError)
+	}
+	do(t, conn, "TYPE", "stream_key")
+	expectReply(t, conn, "+none\r\n")
 }
