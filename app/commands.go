@@ -21,9 +21,9 @@ type command struct {
 	// name. A negative value means "at least -arity".
 	arity   int
 	handler handler
-	// immediate is set for the commands that control transactions: they are
-	// executed right away even inside a transaction, where every other
-	// command is queued instead.
+	// immediate is set for the commands that are executed right away even
+	// inside a transaction, where every other command is queued instead. The
+	// commands that control transactions are.
 	immediate bool
 }
 
@@ -48,7 +48,10 @@ var commands = map[string]command{
 	"XRANGE": {arity: 4, handler: cmdXRange},
 	"XREAD":  {arity: -4, handler: cmdXRead},
 
-	"REPLCONF": {arity: -1, handler: cmdReplconf},
+	// REPLCONF is about the connection, not the dataset: like the commands
+	// that control transactions it is never queued, so that a replica can
+	// acknowledge at any point of the replication stream.
+	"REPLCONF": {arity: -1, handler: cmdReplconf, immediate: true},
 	"PSYNC":    {arity: 3, handler: cmdPsync},
 
 	"MULTI":   {arity: 1, handler: cmdMulti, immediate: true},

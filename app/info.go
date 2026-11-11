@@ -34,10 +34,15 @@ func (s *Server) replicationInfo() []infoField {
 	if s.isReplica() {
 		role = "slave"
 	}
+	// A replica reports how far into its master's stream it is.
+	offset := s.replOffset
+	if s.isReplica() {
+		offset = s.masterOffset
+	}
 	return []infoField{
 		{"role", role},
 		{"master_replid", s.replID},
-		{"master_repl_offset", strconv.FormatInt(s.replOffset, 10)},
+		{"master_repl_offset", strconv.FormatInt(offset, 10)},
 	}
 }
 

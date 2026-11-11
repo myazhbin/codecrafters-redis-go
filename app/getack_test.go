@@ -99,12 +99,32 @@ func TestGetAckErrors(t *testing.T) {
 	do(t, conn, "REPLCONF", "GETACK")
 	expectReply(t, conn, "-ERR syntax error\r\n")
 
+}
+
+func TestReplconfIsNotQueuedInATransaction(t *testing.T) {
+	conn := dial(t, startTestServer(t))
+
 	do(t, conn, "MULTI")
 	expectReply(t, conn, "+OK\r\n")
-	do(t, conn, "REPLCONF", "GETACK", "*")
-	expectReply(t, conn, queued)
+	do(t, conn, "REPLCONF", "capa", "psync2")
+	expectReply(t, conn, "+OK\r\n")
 	do(t, conn, "EXEC")
-	expectReply(t, conn, array("-ERR REPLCONF GETACK is not allowed in a transaction\r\n"))
+	expectReply(t, conn, "*0\r\n")
+}
+
+func TestReplicaAcknowledgesInTheMiddleOfATransaction(t *testing.T) {
+	master := startFakeMaster(t)
+	_, addr := startReplicaOf(t, master)
+	link := master.acceptReplica()
+
+	link.propagate([]string{"MULTI"}, []string{"SET", "foo", "1"})
+	link.propagate([]string{"REPLCONF", "GETACK", "*"})
+	link.expectCommand("REPLCONF", "ACK", "43")
+
+	link.propagate([]string{"EXEC"})
+	conn := dial(t, addr)
+	expectEventually(t, conn, "$1\r\n1\r\n", "GET", "foo")
+	link.expectSilence(50 * time.Millisecond)
 }
 
 func TestIsGetAck(t *testing.T) {

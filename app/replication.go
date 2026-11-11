@@ -268,9 +268,6 @@ func cmdReplconf(c *client, args []string) []byte {
 	}
 
 	if strings.EqualFold(args[0], "GETACK") {
-		if c.executing {
-			return errorReply("ERR REPLCONF GETACK is not allowed in a transaction")
-		}
 		if !c.isMaster {
 			return nil
 		}
