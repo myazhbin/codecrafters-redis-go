@@ -180,11 +180,26 @@ func cmdReplconf(c *client, args []string) []byte {
 //
 // The master always answers with a full synchronization, whatever the replica
 // already has: "+FULLRESYNC <replication ID> <offset>" tells the replica the
-// master's replication ID and the offset the replica starts from.
+// master's replication ID and the offset the replica starts from. It is
+// followed by a snapshot of the dataset, as an RDB file, that the replica
+// loads in place of what it has.
 func cmdPsync(c *client, args []string) []byte {
 	if _, ok := parseInt(args[1]); !ok {
 		return errorReply(errNotAnInteger)
 	}
 	s := c.server
-	return simpleString("FULLRESYNC " + s.replID + " " + strconv.FormatInt(s.replOffset, 10))
+
+	reply := simpleString("FULLRESYNC " + s.replID + " " + strconv.FormatInt(s.replOffset, 10))
+	return append(reply, rdbTransfer(emptyRDB())...)
+}
+
+// rdbTransfer encodes an RDB file the way a master sends it to a replica:
+// "$<length>\r\n<contents>". It looks like a bulk string, but there is no
+// CRLF after the contents.
+func rdbTransfer(file []byte) []byte {
+	b := make([]byte, 0, len(file)+16)
+	b = append(b, '$')
+	b = strconv.AppendInt(b, int64(len(file)), 10)
+	b = append(b, '\r', '\n')
+	return append(b, file...)
 }
