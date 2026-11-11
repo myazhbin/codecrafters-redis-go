@@ -32,18 +32,21 @@ func (s *Server) Serve(l net.Listener) error {
 }
 
 // handleConnection reads commands from the client one after another until it
-// disconnects, replying to each of them with a hardcoded PONG.
+// disconnects, executing each of them and sending back its reply.
 func (s *Server) handleConnection(conn net.Conn) {
 	defer conn.Close()
 
 	reader := bufio.NewReader(conn)
 	for {
-		if _, err := readCommand(reader); err != nil {
+		args, err := readCommand(reader)
+		if err != nil {
 			if errors.Is(err, errProtocol) {
 				fmt.Fprintf(conn, "-ERR %s\r\n", err)
 			}
 			return
 		}
-		conn.Write([]byte("+PONG\r\n"))
+		if _, err := conn.Write(s.execute(args)); err != nil {
+			return
+		}
 	}
 }

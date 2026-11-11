@@ -1,0 +1,26 @@
+package main
+
+import "strconv"
+
+// The helpers in this file encode replies using RESP, the Redis wire protocol.
+
+// simpleString encodes a short, non binary-safe status reply such as "+OK".
+func simpleString(s string) []byte {
+	return []byte("+" + s + "\r\n")
+}
+
+// errorReply encodes an error. By convention msg starts with an upper-case
+// error code, such as "ERR unknown command".
+func errorReply(msg string) []byte {
+	return []byte("-" + msg + "\r\n")
+}
+
+// bulkString encodes a binary-safe string, prefixed by its length in bytes.
+func bulkString(s string) []byte {
+	b := make([]byte, 0, len(s)+16)
+	b = append(b, '$')
+	b = strconv.AppendInt(b, int64(len(s)), 10)
+	b = append(b, '\r', '\n')
+	b = append(b, s...)
+	return append(b, '\r', '\n')
+}

@@ -119,3 +119,26 @@ func TestReadCommandErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestReplyEncoding(t *testing.T) {
+	tests := []struct {
+		name string
+		got  []byte
+		want string
+	}{
+		{"simple string", simpleString("PONG"), "+PONG\r\n"},
+		{"error", errorReply("ERR something went wrong"), "-ERR something went wrong\r\n"},
+		{"bulk string", bulkString("hey"), "$3\r\nhey\r\n"},
+		{"empty bulk string", bulkString(""), "$0\r\n\r\n"},
+		{"bulk string length is in bytes", bulkString("héllo"), "$6\r\nhéllo\r\n"},
+		{"bulk string with CRLF", bulkString("a\r\nb"), "$4\r\na\r\nb\r\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if string(tt.got) != tt.want {
+				t.Fatalf("got %q, want %q", tt.got, tt.want)
+			}
+		})
+	}
+}
