@@ -11,12 +11,22 @@ const defaultUserName = "default"
 // user is an account on the server.
 type user struct {
 	name string
+	// nopass is set for a user that has no password: anyone can be
+	// authenticated as that user, whatever the password they give, if they
+	// give one at all.
+	nopass bool
 }
 
 // flags returns the flags of the user: short labels that describe how the
 // account behaves.
+//
+//   - "nopass": the user has no password.
 func (u *user) flags() []string {
-	return nil
+	var flags []string
+	if u.nopass {
+		flags = append(flags, "nopass")
+	}
+	return flags
 }
 
 // cmdACL implements the ACL command, which is about the users of the server.

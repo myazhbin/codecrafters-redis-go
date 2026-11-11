@@ -105,7 +105,9 @@ func NewServerWithConfig(cfg config) *Server {
 		subscribers:     make(map[string]map[*client]struct{}),
 		replicas:        make(map[*client]struct{}),
 		ackWaiters:      make(map[*ackWaiter]struct{}),
-		defaultUser:     &user{name: defaultUserName},
+		// The default user has no password to start with, which is why
+		// clients don't have to authenticate.
+		defaultUser: &user{name: defaultUserName, nopass: true},
 	}
 	s.store.onModify = s.keyModified
 	s.users = map[string]*user{s.defaultUser.name: s.defaultUser}
