@@ -79,8 +79,9 @@ var commands = map[string]command{
 	"ZSCORE": {arity: 3, handler: cmdZScore},
 	"ZREM":   {arity: -3, handler: cmdZRem},
 
-	"SETBIT": {arity: 4, handler: cmdSetBit},
-	"GETBIT": {arity: 3, handler: cmdGetBit},
+	"SETBIT":   {arity: 4, handler: cmdSetBit},
+	"GETBIT":   {arity: 3, handler: cmdGetBit},
+	"BITCOUNT": {arity: -2, handler: cmdBitCount},
 
 	"SUBSCRIBE":   {arity: -2, handler: cmdSubscribe, pubsub: true},
 	"UNSUBSCRIBE": {arity: -1, handler: cmdUnsubscribe, pubsub: true},

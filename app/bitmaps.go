@@ -1,6 +1,9 @@
 package main
 
-import "strings"
+import (
+	"math/bits"
+	"strings"
+)
 
 // This file implements bitmaps and the commands that operate on them.
 //
@@ -36,6 +39,37 @@ func getBit(value string, offset int64) byte {
 		return 1
 	}
 	return 0
+}
+
+// popCount returns the number of bits that are set to 1 in s.
+func popCount(s string) int {
+	count := 0
+	// Eight bytes at a time, for as long as there are that many.
+	for len(s) >= 8 {
+		word := uint64(s[0]) | uint64(s[1])<<8 | uint64(s[2])<<16 | uint64(s[3])<<24 |
+			uint64(s[4])<<32 | uint64(s[5])<<40 | uint64(s[6])<<48 | uint64(s[7])<<56
+		count += bits.OnesCount64(word)
+		s = s[8:]
+	}
+	for i := 0; i < len(s); i++ {
+		count += bits.OnesCount8(s[i])
+	}
+	return count
+}
+
+// countBits returns the number of bits set to 1 among the bits of value whose
+// offset goes from first to last, both included. The two must be offsets of
+// bits that value has, in that order.
+func countBits(value string, first, last int64) int {
+	from, to := int(first/8), int(last/8)
+	// What is left of the first byte once the bits before first are masked,
+	// and of the last byte once the bits after last are.
+	head := value[from] & (0xFF >> (first % 8))
+	lastMask := byte(0xFF << (7 - last%8))
+	if from == to {
+		return bits.OnesCount8(head & lastMask)
+	}
+	return bits.OnesCount8(head) + popCount(value[from+1:to]) + bits.OnesCount8(value[to]&lastMask)
 }
 
 // zeros is a block of zero bytes, to pad strings with.
@@ -141,4 +175,78 @@ func cmdGetBit(c *client, args []string) []byte {
 		return errorReply(err.Error())
 	}
 	return integerReply(int(getBit(value, offset)))
+}
+
+// cmdBitCount implements BITCOUNT key [start end [BYTE | BIT]]: it replies
+// with the number of bits set to 1 in the string stored at key, which is 0 if
+// the key doesn't exist.
+//
+// With start and end, only the bits from index start to index end, both
+// included, are counted. The indexes are those of bytes, unless BIT asks for
+// them to be those of bits. They start at 0, and negative ones count from the
+// end of the string: -1 is its last byte, or bit. An index that falls outside
+// of the string is brought back to its closest end, and nothing is counted in
+// a range whose start comes after its end.
+func cmdBitCount(c *client, args []string) []byte {
+	var (
+		ranged     bool
+		start, end int64
+		inBits     bool
+	)
+	switch len(args) {
+	case 1:
+	case 3, 4:
+		var startOK, endOK bool
+		start, startOK = parseInt(args[1])
+		end, endOK = parseInt(args[2])
+		if !startOK || !endOK {
+			return errorReply(errNotAnInteger)
+		}
+		if len(args) == 4 {
+			switch strings.ToUpper(args[3]) {
+			case "BIT":
+				inBits = true
+			case "BYTE":
+			default:
+				return errorReply("ERR syntax error")
+			}
+		}
+		ranged = true
+	default:
+		return errorReply("ERR syntax error")
+	}
+
+	value, _, err := c.server.store.getString(args[0])
+	if err != nil {
+		return errorReply(err.Error())
+	}
+
+	// The number of things the indexes count: bytes, or bits.
+	total := int64(len(value))
+	if inBits {
+		total *= 8
+	}
+	if !ranged {
+		start, end = 0, total-1
+	} else {
+		// Two indexes that count from the end are compared before they are
+		// brought back into the string, where they could both end up at 0.
+		if start < 0 && end < 0 && start > end {
+			return integerReply(0)
+		}
+		if start < 0 {
+			start = max(start+total, 0)
+		}
+		if end < 0 {
+			end = max(end+total, 0)
+		}
+		end = min(end, total-1)
+	}
+	if start > end {
+		return integerReply(0)
+	}
+	if !inBits {
+		start, end = 8*start, 8*end+7
+	}
+	return integerReply(countBits(value, start, end))
 }
