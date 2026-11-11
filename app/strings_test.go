@@ -228,13 +228,13 @@ func TestStore(t *testing.T) {
 		t.Fatalf(`get("missing") = (%q, %v), want ("", false)`, value, ok)
 	}
 
-	st.set("key", "value")
+	st.set("key", "value", noExpiry)
 	if value, ok := st.get("key"); !ok || value != "value" {
 		t.Fatalf(`get("key") = (%q, %v), want ("value", true)`, value, ok)
 	}
 
 	// An empty value is still a value: the key exists.
-	st.set("key", "")
+	st.set("key", "", noExpiry)
 	if value, ok := st.get("key"); !ok || value != "" {
 		t.Fatalf(`get("key") after overwrite = (%q, %v), want ("", true)`, value, ok)
 	}

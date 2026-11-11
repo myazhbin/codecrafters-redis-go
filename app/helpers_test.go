@@ -5,13 +5,21 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
-// startTestServer runs a Server on a random local port for the duration of the
-// test and returns the address to dial.
+// startTestServer runs a new Server on a random local port for the duration
+// of the test and returns the address to dial.
 func startTestServer(t *testing.T) string {
+	t.Helper()
+	return startServer(t, NewServer())
+}
+
+// startServer runs srv on a random local port for the duration of the test and
+// returns the address to dial.
+func startServer(t *testing.T, srv *Server) string {
 	t.Helper()
 
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -20,7 +28,7 @@ func startTestServer(t *testing.T) string {
 	}
 
 	done := make(chan error, 1)
-	go func() { done <- NewServer().Serve(l) }()
+	go func() { done <- srv.Serve(l) }()
 
 	t.Cleanup(func() {
 		l.Close()
@@ -35,6 +43,42 @@ func startTestServer(t *testing.T) string {
 	})
 
 	return l.Addr().String()
+}
+
+// fakeClock is a manually advanced clock, used to test expiry without
+// sleeping. It's safe for concurrent use.
+type fakeClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func newFakeClock() *fakeClock {
+	return &fakeClock{now: time.Date(2024, time.March, 10, 12, 0, 0, 0, time.UTC)}
+}
+
+// Now returns the clock's current time.
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+// Advance moves the clock forward by d.
+func (c *fakeClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+}
+
+// startTestServerWithClock is like startTestServer, but the server's notion of
+// time is driven by the returned clock.
+func startTestServerWithClock(t *testing.T) (string, *fakeClock) {
+	t.Helper()
+
+	clock := newFakeClock()
+	srv := NewServer()
+	srv.store.now = clock.Now
+	return startServer(t, srv), clock
 }
 
 // dial connects to the test server and fails the test if it can't.
