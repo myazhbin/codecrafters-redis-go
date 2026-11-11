@@ -74,6 +74,18 @@ func (z *sortedSet) add(member string, score float64) (added, changed bool) {
 	return !exists, true
 }
 
+// remove takes member out of the set, and reports whether it was in it.
+func (z *sortedSet) remove(member string) bool {
+	score, ok := z.scores[member]
+	if !ok {
+		return false
+	}
+	i := z.position(scoredMember{member, score})
+	z.ordered = slices.Delete(z.ordered, i, i+1)
+	delete(z.scores, member)
+	return true
+}
+
 // rank returns the rank of member: its position in the set, counting from 0,
 // when the members are in order. It also reports whether the member is in
 // the set at all.
@@ -312,4 +324,37 @@ func cmdZScore(c *client, args []string) []byte {
 		return nullBulkString
 	}
 	return bulkString(formatScore(score))
+}
+
+// cmdZRem implements ZREM key member [member ...]: it removes the members
+// from the sorted set stored at key, and replies with the number of members
+// that were removed: the ones that weren't in the set don't count. A set
+// that loses its last member is deleted.
+func cmdZRem(c *client, args []string) []byte {
+	s := c.server
+	key := args[0]
+
+	z, err := s.store.getSortedSet(key)
+	if err != nil {
+		return errorReply(err.Error())
+	}
+	if z == nil {
+		return integerReply(0)
+	}
+
+	removed := 0
+	for _, member := range args[1:] {
+		if z.remove(member) {
+			removed++
+		}
+	}
+	if removed > 0 {
+		if len(z.ordered) == 0 {
+			s.store.delete(key)
+		} else {
+			s.store.modified(key)
+		}
+		s.propagate(append([]string{"ZREM"}, args...)...)
+	}
+	return integerReply(removed)
 }

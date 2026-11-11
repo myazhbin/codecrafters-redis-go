@@ -76,6 +76,7 @@ var commands = map[string]command{
 	"ZRANGE": {arity: -4, handler: cmdZRange},
 	"ZCARD":  {arity: 2, handler: cmdZCard},
 	"ZSCORE": {arity: 3, handler: cmdZScore},
+	"ZREM":   {arity: -3, handler: cmdZRem},
 
 	"SUBSCRIBE":   {arity: -2, handler: cmdSubscribe, pubsub: true},
 	"UNSUBSCRIBE": {arity: -1, handler: cmdUnsubscribe, pubsub: true},
